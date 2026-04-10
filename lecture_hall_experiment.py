@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Generate and solve random lecture-hall assignment instances.
+"""Generate and solve random single-day lecture-hall assignment instances.
 
 The script builds one random instance, solves it with three formulations:
 1. GUROBI bilinear MIQP
 2. GUROBI linearized MILP
 3. OR-Tools CP-SAT
 
-It then writes an Excel workbook with solver results and the generated data.
+It then writes an Excel workbook with solver results and can optionally write
+JSON files with the full instance and all solver solutions.
 """
 
 from __future__ import annotations
@@ -32,7 +33,8 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 from ortools.sat.python import cp_model
 
 
-DAYS_PER_WEEK = 5
+# The problem is separable by day, so each generated instance is a single-day instance.
+DAYS_PER_WEEK = 1
 
 
 @dataclass(frozen=True)
@@ -77,12 +79,12 @@ class Instance:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Generate a random lecture-hall assignment instance, solve it with "
-            "Gurobi and OR-Tools, and write an Excel experiment summary."
+            "Generate a random single-day lecture-hall assignment instance, solve it with "
+            "the selected formulation(s), and write an Excel experiment summary."
         ),
         epilog=(
             "Density is interpreted as total lecture slots divided by total "
-            "available hall-slots. This matches the stated default of 0.9."
+            "available hall-slots in the day. This matches the stated default of 0.9."
         ),
     )
     parser.add_argument(
@@ -132,6 +134,24 @@ def parse_args() -> argparse.Namespace:
         help="Per-solver time limit in seconds. Default: 60.",
     )
     parser.add_argument(
+        "--cuts",
+        dest="cuts",
+        type=int,
+        choices=(0, 1),
+        default=1,
+        help="Turn the extra strengthening cuts for the linearized MILP on (1) or off (0). Default: 1.",
+    )
+    parser.add_argument(
+        "--model",
+        dest="model",
+        type=str,
+        default=None,
+        help=(
+            "Optional single model to solve: MIPQ, MIP, CP, or ROOT. "
+            "When omitted, the script solves the three original models."
+        ),
+    )
+    parser.add_argument(
         "--output",
         dest="output",
         type=Path,
@@ -167,6 +187,12 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--common-prob must be in [0, 1].")
     if args.time_limit <= 0:
         raise SystemExit("--time-limit must be positive.")
+    if args.model is not None:
+        args.model = args.model.upper()
+        if args.model == "MIQP":
+            args.model = "MIPQ"
+        if args.model not in {"MIPQ", "MIP", "CP", "ROOT"}:
+            raise SystemExit("--model must be one of MIPQ, MIP, CP, or ROOT.")
 
 
 def ensure_output_path(path: Path | None, seed: Any, num_halls: int) -> Path:
@@ -263,7 +289,9 @@ def generate_distances(halls: list[Hall]) -> list[list[int]]:
         for j, hall_j in enumerate(halls):
             if i == j:
                 continue
-            distances[i][j] = int(round(math.dist((hall_i.x, hall_i.y), (hall_j.x, hall_j.y)) * 10))
+            # Ceiling preserves the triangle inequality when converting
+            # scaled Euclidean distances to integers.
+            distances[i][j] = int(math.ceil(math.dist((hall_i.x, hall_i.y), (hall_j.x, hall_j.y)) * 10))
     return distances
 
 
@@ -571,6 +599,133 @@ def assignment_details_from_map(
     }
 
 
+def build_gurobi_linearized_model(
+    instance: Instance,
+    cuts: bool,
+    time_limit: float | None,
+    verbose: bool,
+    threads: int | None = None,
+) -> tuple[Model, dict[tuple[int, int], Any], dict[tuple[int, int, int, int], Any], int]:
+    thread_limit = gurobi_thread_limit() if threads is None else threads
+    model = Model("lecture_hall_linearized")
+    model.Params.OutputFlag = 1 if verbose else 0
+    if time_limit is not None:
+        model.Params.TimeLimit = time_limit
+    model.Params.Threads = thread_limit
+
+    x: dict[tuple[int, int], Any] = {}
+    y: dict[tuple[int, int, int, int], Any] = {}
+
+    for lecture in instance.lectures:
+        for hall_id in instance.compatibility[lecture.lecture_id]:
+            x[(lecture.lecture_id, hall_id)] = model.addVar(
+                vtype=GRB.BINARY,
+                name=f"x_{lecture.lecture_id}_{hall_id}",
+            )
+
+    for (lecture_id_1, lecture_id_2) in instance.common_students:
+        for hall_id_1 in instance.compatibility[lecture_id_1]:
+            for hall_id_2 in instance.compatibility[lecture_id_2]:
+                y[(lecture_id_1, lecture_id_2, hall_id_1, hall_id_2)] = model.addVar(
+                    vtype=GRB.BINARY,
+                    name=f"y_{lecture_id_1}_{lecture_id_2}_{hall_id_1}_{hall_id_2}",
+                )
+
+    model.update()
+
+    for lecture in instance.lectures:
+        model.addConstr(
+            quicksum(
+                x[(lecture.lecture_id, hall_id)]
+                for hall_id in instance.compatibility[lecture.lecture_id]
+            )
+            == 1,
+            name=f"assign_{lecture.lecture_id}",
+        )
+
+    for slot, active_lectures in instance.active_lectures_by_slot.items():
+        if len(active_lectures) <= 1:
+            continue
+        for hall in instance.halls:
+            vars_for_slot = [
+                x[(lecture_id, hall.hall_id)]
+                for lecture_id in active_lectures
+                if (lecture_id, hall.hall_id) in x
+            ]
+            if len(vars_for_slot) > 1:
+                model.addConstr(
+                    quicksum(vars_for_slot) <= 1,
+                    name=f"overlap_h{hall.hall_id}_t{slot}",
+                )
+
+    for (lecture_id_1, lecture_id_2), _ in instance.common_students.items():
+        for hall_id_1 in instance.compatibility[lecture_id_1]:
+            for hall_id_2 in instance.compatibility[lecture_id_2]:
+                model.addConstr(
+                    y[(lecture_id_1, lecture_id_2, hall_id_1, hall_id_2)]
+                    >= x[(lecture_id_1, hall_id_1)] + x[(lecture_id_2, hall_id_2)] - 1,
+                    name=f"link_{lecture_id_1}_{lecture_id_2}_{hall_id_1}_{hall_id_2}",
+                )
+
+    if cuts:
+        # Strengthen the LP relaxation by conditioning the realized distance
+        # on one fixed hall choice at a time.
+        for (lecture_id_1, lecture_id_2), _ in instance.common_students.items():
+            halls_1 = instance.compatibility[lecture_id_1]
+            halls_2 = instance.compatibility[lecture_id_2]
+
+            for hall_id_1 in halls_1:
+                max_distance = max(
+                    instance.distances[hall_id_1][hall_id_2] for hall_id_2 in halls_2
+                )
+                model.addConstr(
+                    quicksum(
+                        instance.distances[hall_id_1][hall_id_2]
+                        * y[(lecture_id_1, lecture_id_2, hall_id_1, hall_id_2)]
+                        for hall_id_2 in halls_2
+                    )
+                    >= quicksum(
+                        instance.distances[hall_id_1][hall_id_2]
+                        * x[(lecture_id_2, hall_id_2)]
+                        for hall_id_2 in halls_2
+                    )
+                    - max_distance * (1 - x[(lecture_id_1, hall_id_1)]),
+                    name=f"cut_from_{lecture_id_1}_{lecture_id_2}_{hall_id_1}",
+                )
+
+            for hall_id_2 in halls_2:
+                max_distance = max(
+                    instance.distances[hall_id_1][hall_id_2] for hall_id_1 in halls_1
+                )
+                model.addConstr(
+                    quicksum(
+                        instance.distances[hall_id_1][hall_id_2]
+                        * y[(lecture_id_1, lecture_id_2, hall_id_1, hall_id_2)]
+                        for hall_id_1 in halls_1
+                    )
+                    >= quicksum(
+                        instance.distances[hall_id_1][hall_id_2]
+                        * x[(lecture_id_1, hall_id_1)]
+                        for hall_id_1 in halls_1
+                    )
+                    - max_distance * (1 - x[(lecture_id_2, hall_id_2)]),
+                    name=f"cut_to_{lecture_id_1}_{lecture_id_2}_{hall_id_2}",
+                )
+
+    objective_terms = []
+    for (lecture_id_1, lecture_id_2), common_count in instance.common_students.items():
+        for hall_id_1 in instance.compatibility[lecture_id_1]:
+            for hall_id_2 in instance.compatibility[lecture_id_2]:
+                distance = instance.distances[hall_id_1][hall_id_2]
+                objective_terms.append(
+                    common_count
+                    * distance
+                    * y[(lecture_id_1, lecture_id_2, hall_id_1, hall_id_2)]
+                )
+    model.setObjective(quicksum(objective_terms), GRB.MINIMIZE)
+    return model, x, y, thread_limit
+
+
 def solve_gurobi_quadratic(instance: Instance, time_limit: float, verbose: bool = True) -> dict[str, Any]:
     wall_start = time.perf_counter()
     thread_limit = gurobi_thread_limit()
@@ -673,80 +828,20 @@ def solve_gurobi_quadratic(instance: Instance, time_limit: float, verbose: bool 
         }
 
 
-def solve_gurobi_linearized(instance: Instance, time_limit: float, verbose: bool = True) -> dict[str, Any]:
+def solve_gurobi_linearized(
+    instance: Instance,
+    time_limit: float,
+    cuts: bool = True,
+    verbose: bool = True,
+) -> dict[str, Any]:
     wall_start = time.perf_counter()
-    thread_limit = gurobi_thread_limit()
     try:
-        model = Model("lecture_hall_linearized")
-        model.Params.OutputFlag = 1 if verbose else 0
-        model.Params.TimeLimit = time_limit
-        model.Params.Threads = thread_limit
-
-        x: dict[tuple[int, int], Any] = {}
-        y: dict[tuple[int, int, int, int], Any] = {}
-
-        for lecture in instance.lectures:
-            for hall_id in instance.compatibility[lecture.lecture_id]:
-                x[(lecture.lecture_id, hall_id)] = model.addVar(
-                    vtype=GRB.BINARY,
-                    name=f"x_{lecture.lecture_id}_{hall_id}",
-                )
-
-        for (lecture_id_1, lecture_id_2) in instance.common_students:
-            for hall_id_1 in instance.compatibility[lecture_id_1]:
-                for hall_id_2 in instance.compatibility[lecture_id_2]:
-                    y[(lecture_id_1, lecture_id_2, hall_id_1, hall_id_2)] = model.addVar(
-                        vtype=GRB.BINARY,
-                        name=f"y_{lecture_id_1}_{lecture_id_2}_{hall_id_1}_{hall_id_2}",
-                    )
-
-        model.update()
-
-        for lecture in instance.lectures:
-            model.addConstr(
-                quicksum(
-                    x[(lecture.lecture_id, hall_id)]
-                    for hall_id in instance.compatibility[lecture.lecture_id]
-                )
-                == 1,
-                name=f"assign_{lecture.lecture_id}",
-            )
-
-        for slot, active_lectures in instance.active_lectures_by_slot.items():
-            if len(active_lectures) <= 1:
-                continue
-            for hall in instance.halls:
-                vars_for_slot = [
-                    x[(lecture_id, hall.hall_id)]
-                    for lecture_id in active_lectures
-                    if (lecture_id, hall.hall_id) in x
-                ]
-                if len(vars_for_slot) > 1:
-                    model.addConstr(
-                        quicksum(vars_for_slot) <= 1,
-                        name=f"overlap_h{hall.hall_id}_t{slot}",
-                    )
-
-        for (lecture_id_1, lecture_id_2), _ in instance.common_students.items():
-            for hall_id_1 in instance.compatibility[lecture_id_1]:
-                for hall_id_2 in instance.compatibility[lecture_id_2]:
-                    model.addConstr(
-                        y[(lecture_id_1, lecture_id_2, hall_id_1, hall_id_2)]
-                        >= x[(lecture_id_1, hall_id_1)] + x[(lecture_id_2, hall_id_2)] - 1,
-                        name=f"link_{lecture_id_1}_{lecture_id_2}_{hall_id_1}_{hall_id_2}",
-                    )
-
-        objective_terms = []
-        for (lecture_id_1, lecture_id_2), common_count in instance.common_students.items():
-            for hall_id_1 in instance.compatibility[lecture_id_1]:
-                for hall_id_2 in instance.compatibility[lecture_id_2]:
-                    distance = instance.distances[hall_id_1][hall_id_2]
-                    objective_terms.append(
-                        common_count
-                        * distance
-                        * y[(lecture_id_1, lecture_id_2, hall_id_1, hall_id_2)]
-                    )
-        model.setObjective(quicksum(objective_terms), GRB.MINIMIZE)
+        model, x, _, thread_limit = build_gurobi_linearized_model(
+            instance=instance,
+            cuts=cuts,
+            time_limit=time_limit,
+            verbose=verbose,
+        )
         model.optimize()
 
         if model.Status == GRB.INTERRUPTED:
@@ -773,6 +868,7 @@ def solve_gurobi_linearized(instance: Instance, time_limit: float, verbose: bool
             "solver_runtime_seconds": safe_float(model.Runtime),
             "mip_gap": safe_float(model.MIPGap) if model.SolCount > 0 else None,
             "threads": thread_limit,
+            "cuts_enabled": cuts,
             "error": None,
             "solution": assignment_details_from_map(instance, assignment_by_lecture),
         }
@@ -787,6 +883,80 @@ def solve_gurobi_linearized(instance: Instance, time_limit: float, verbose: bool
             "solver_runtime_seconds": None,
             "mip_gap": None,
             "threads": thread_limit,
+            "cuts_enabled": cuts,
+            "error": str(error),
+            "solution": None,
+        }
+
+
+def solve_gurobi_linearized_root(
+    instance: Instance,
+    time_limit: float,
+    cuts: bool = True,
+    verbose: bool = True,
+) -> dict[str, Any]:
+    wall_start = time.perf_counter()
+    try:
+        model, _, _, thread_limit = build_gurobi_linearized_model(
+            instance=instance,
+            cuts=cuts,
+            time_limit=time_limit,
+            verbose=verbose,
+        )
+        model._root_bound = None
+        model._terminated_after_root = False
+
+        def callback(cb_model: Model, where: int) -> None:
+            if where != GRB.Callback.MIP:
+                return
+
+            node_count = cb_model.cbGet(GRB.Callback.MIP_NODCNT)
+            obj_bound = cb_model.cbGet(GRB.Callback.MIP_OBJBND)
+            if node_count == 0:
+                if cb_model._root_bound is None or obj_bound > cb_model._root_bound:
+                    cb_model._root_bound = obj_bound
+            elif not cb_model._terminated_after_root:
+                cb_model._terminated_after_root = True
+                cb_model.terminate()
+
+        model.optimize(callback)
+
+        wall_seconds = time.perf_counter() - wall_start
+        root_bound = safe_float(model._root_bound)
+        if root_bound is None:
+            root_bound = safe_float(model.ObjBound)
+
+        if model._terminated_after_root:
+            status = "ROOT_LIMIT"
+        else:
+            status = status_name_from_gurobi(model.Status)
+
+        return {
+            "solver_family": "GUROBI",
+            "formulation": "linearized_root",
+            "status": status,
+            "objective_value": None,
+            "lower_bound": root_bound,
+            "wall_clock_seconds": wall_seconds,
+            "solver_runtime_seconds": safe_float(model.Runtime),
+            "mip_gap": None,
+            "threads": thread_limit,
+            "cuts_enabled": cuts,
+            "error": None,
+            "solution": None,
+        }
+    except GurobiError as error:
+        return {
+            "solver_family": "GUROBI",
+            "formulation": "linearized_root",
+            "status": "ERROR",
+            "objective_value": None,
+            "lower_bound": None,
+            "wall_clock_seconds": time.perf_counter() - wall_start,
+            "solver_runtime_seconds": None,
+            "mip_gap": None,
+            "threads": gurobi_thread_limit(),
+            "cuts_enabled": cuts,
             "error": str(error),
             "solution": None,
         }
@@ -884,6 +1054,7 @@ def build_summary_rows(
     started_at: dt.datetime,
     finished_at: dt.datetime,
     time_limit: float,
+    cuts_enabled: bool,
 ) -> list[dict[str, Any]]:
     total_lecture_length = sum(lecture.duration for lecture in instance.lectures)
     sizes = [lecture.students for lecture in instance.lectures]
@@ -904,6 +1075,13 @@ def build_summary_rows(
         script_name = "unknown"
         script_last_modified = "unknown"
 
+    valid_lower_bounds = [
+        float(result["lower_bound"])
+        for result in results
+        if result.get("lower_bound") is not None and math.isfinite(float(result["lower_bound"]))
+    ]
+    best_global_lower_bound = max(valid_lower_bounds) if valid_lower_bounds else None
+
     rows = []
     for result in results:
         obj = result.get("objective_value")
@@ -914,7 +1092,13 @@ def build_summary_rows(
                 gap = max(0.0, float(obj - lb) / abs(float(obj)))
             else:
                 gap = 0.0 if float(lb) >= 0 else float("inf")
-        
+
+        global_gap = None
+        if obj is not None and best_global_lower_bound is not None:
+            if obj != 0:
+                global_gap = max(0.0, float(obj - best_global_lower_bound) / abs(float(obj)))
+            else:
+                global_gap = 0.0 if float(best_global_lower_bound) >= 0 else float("inf")
 
         rows.append(
             {
@@ -934,6 +1118,7 @@ def build_summary_rows(
                 "density_actual": instance.density_actual,
                 "common_prob": instance.common_prob,
                 "time_limit_seconds": time_limit,
+                "linearized_cuts": cuts_enabled,
                 "num_lectures": len(instance.lectures),
                 "total_lecture_length": total_lecture_length,
                 "avg_lecture_length": total_lecture_length / len(instance.lectures),
@@ -956,10 +1141,12 @@ def build_summary_rows(
                 "status": result["status"],
                 "objective_value": result["objective_value"],
                 "lower_bound": result["lower_bound"],
+                "best_global_lower_bound": best_global_lower_bound,
                 "wall_clock_seconds": result["wall_clock_seconds"],
                 "solver_runtime_seconds": result["solver_runtime_seconds"],
                 "mip_gap": result["mip_gap"],
                 "optimality_gap": gap,
+                "global opt gap": global_gap,
                 "threads": result["threads"],
                 "error": result["error"],
             }
@@ -1101,6 +1288,7 @@ def build_json_payload(
     started_at: dt.datetime,
     finished_at: dt.datetime,
     time_limit: float,
+    cuts_enabled: bool,
 ) -> dict[str, Any]:
     return {
         "experiment": {
@@ -1110,6 +1298,7 @@ def build_json_payload(
             "platform": platform.platform(),
             "python_version": sys.version,
             "time_limit_seconds": time_limit,
+            "linearized_cuts": cuts_enabled,
         },
         "instance": instance_to_json_dict(instance),
         "results_summary": summary_rows,
@@ -1119,78 +1308,10 @@ def build_json_payload(
 
 def write_excel(
     output_path: Path,
-    instance: Instance,
-    results: list[dict[str, Any]],
     summary_rows: list[dict[str, Any]],
-    run_tag: str,
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    halls_df = pd.DataFrame(
-        [
-            {
-                "hall_id": hall.hall_id,
-                "hall_name": hall.name,
-                "capacity": hall.capacity,
-                "x": hall.x,
-                "y": hall.y,
-            }
-            for hall in instance.halls
-        ]
-    )
-    lectures_df = pd.DataFrame(
-        [
-            {
-                "lecture_id": lecture.lecture_id,
-                "lecture_name": lecture.name,
-                "day": lecture.day,
-                "start_slot_in_day": lecture.start_slot_in_day,
-                "duration": lecture.duration,
-                "start_slot": lecture.start_slot,
-                "end_slot": lecture.end_slot,
-                "students": lecture.students,
-                "hidden_hall_id": lecture.hidden_hall,
-                "compatible_halls": ",".join(map(str, instance.compatibility[lecture.lecture_id])),
-            }
-            for lecture in instance.lectures
-        ]
-    )
-    transitions_df = pd.DataFrame(
-        [
-            {
-                "from_lecture_id": lecture_id_1,
-                "to_lecture_id": lecture_id_2,
-                "common_students": common_count,
-            }
-            for (lecture_id_1, lecture_id_2), common_count in sorted(instance.common_students.items())
-        ]
-    )
-    distance_df = pd.DataFrame(instance.distances)
-    distance_df.index.name = "from_hall_id"
-    distance_df.columns = [f"to_{hall.hall_id}" for hall in instance.halls]
     summary_df = pd.DataFrame(summary_rows)
-    assignments_df = pd.DataFrame(
-        [
-            {
-                "solver_family": result["solver_family"],
-                "formulation": result["formulation"],
-                **assignment_row,
-            }
-            for result in results
-            for assignment_row in (result.get("solution") or {}).get("assignments", [])
-        ]
-    )
-    objective_terms_df = pd.DataFrame(
-        [
-            {
-                "solver_family": result["solver_family"],
-                "formulation": result["formulation"],
-                **term_row,
-            }
-            for result in results
-            for term_row in (result.get("solution") or {}).get("objective_terms", [])
-        ]
-    )
 
     if output_path.exists():
         workbook = load_workbook(output_path)
@@ -1201,14 +1322,6 @@ def write_excel(
             workbook.remove(default_sheet)
 
     append_summary_sheet(workbook, summary_df)
-    append_dataframe_to_sheet(workbook, f"halls_{run_tag}", halls_df)
-    append_dataframe_to_sheet(workbook, f"lectures_{run_tag}", lectures_df)
-    append_dataframe_to_sheet(workbook, f"successors_{run_tag}", transitions_df)
-    append_dataframe_to_sheet(workbook, f"distances_{run_tag}", distance_df.reset_index())
-    if not assignments_df.empty:
-        append_dataframe_to_sheet(workbook, f"assignments_{run_tag}", assignments_df)
-    if not objective_terms_df.empty:
-        append_dataframe_to_sheet(workbook, f"term_costs_{run_tag}", objective_terms_df)
     workbook.save(output_path)
 
 
@@ -1223,10 +1336,16 @@ def print_console_summary(output_path: Path, summary_rows: list[dict[str, Any]])
     print("")
     for row in summary_rows:
         gap_str = str(row['optimality_gap']) if row['optimality_gap'] is None else f"{row['optimality_gap']:.2%}"
+        global_gap_str = (
+            str(row['global opt gap'])
+            if row['global opt gap'] is None
+            else f"{row['global opt gap']:.2%}"
+        )
         print(
             f"{row['solver_family']:>8} | {row['formulation']:<16} | "
             f"status={row['status']:<12} | obj={row['objective_value']} | "
-            f"lb={row['lower_bound']} | gap={gap_str} | wall={row['wall_clock_seconds']:.3f}s"
+            f"lb={row['lower_bound']} | gap={gap_str} | global={global_gap_str} | "
+            f"wall={row['wall_clock_seconds']:.3f}s"
         )
 
 
@@ -1254,11 +1373,43 @@ def main() -> None:
             common_prob=args.common_prob,
         )
 
-        results = [
-            solve_gurobi_quadratic(instance, args.time_limit, verbose=not args.quiet),
-            solve_gurobi_linearized(instance, args.time_limit, verbose=not args.quiet),
-            solve_cp_sat(instance, args.time_limit, verbose=not args.quiet),
-        ]
+        if args.model is None:
+            results = [
+                solve_gurobi_quadratic(instance, args.time_limit, verbose=not args.quiet),
+                solve_gurobi_linearized(
+                    instance,
+                    args.time_limit,
+                    cuts=bool(args.cuts),
+                    verbose=not args.quiet,
+                ),
+                solve_cp_sat(instance, args.time_limit, verbose=not args.quiet),
+            ]
+        elif args.model == "MIPQ":
+            results = [
+                solve_gurobi_quadratic(instance, args.time_limit, verbose=not args.quiet),
+            ]
+        elif args.model == "MIP":
+            results = [
+                solve_gurobi_linearized(
+                    instance,
+                    args.time_limit,
+                    cuts=bool(args.cuts),
+                    verbose=not args.quiet,
+                ),
+            ]
+        elif args.model == "CP":
+            results = [
+                solve_cp_sat(instance, args.time_limit, verbose=not args.quiet),
+            ]
+        else:
+            results = [
+                solve_gurobi_linearized_root(
+                    instance,
+                    args.time_limit,
+                    cuts=bool(args.cuts),
+                    verbose=not args.quiet,
+                ),
+            ]
 
         finished_at = dt.datetime.now().astimezone()
         summary_rows = build_summary_rows(
@@ -1267,9 +1418,10 @@ def main() -> None:
             started_at=started_at,
             finished_at=finished_at,
             time_limit=args.time_limit,
+            cuts_enabled=bool(args.cuts),
         )
         all_summary_rows.extend(summary_rows)
-        write_excel(output_path, instance, results, summary_rows, run_tag)
+        write_excel(output_path, summary_rows)
         
         if args.save_json:
             json_path = build_json_path(output_path, run_tag)
@@ -1280,6 +1432,7 @@ def main() -> None:
                 started_at=started_at,
                 finished_at=finished_at,
                 time_limit=args.time_limit,
+                cuts_enabled=bool(args.cuts),
             )
             write_json(json_path, payload)
             print(f"JSON written to: {json_path}")
