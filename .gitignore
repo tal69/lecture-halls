@@ -1,0 +1,11 @@
+# Python caching
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Mac OS
+.DS_Store
+
+# Results files
+*.xlsx
+*.json
