@@ -885,6 +885,16 @@ def build_summary_rows(
 
     rows = []
     for result in results:
+        obj = result.get("objective_value")
+        lb = result.get("lower_bound")
+        gap = result.get("mip_gap")
+        if gap is None and obj is not None and lb is not None:
+            if obj != 0:
+                gap = max(0.0, float(obj - lb) / abs(float(obj)))
+            else:
+                gap = 0.0 if float(lb) >= 0 else float("inf")
+        
+
         rows.append(
             {
                 "experiment_started_at": started_at.isoformat(),
@@ -928,6 +938,7 @@ def build_summary_rows(
                 "wall_clock_seconds": result["wall_clock_seconds"],
                 "solver_runtime_seconds": result["solver_runtime_seconds"],
                 "mip_gap": result["mip_gap"],
+                "optimality_gap": gap,
                 "threads": result["threads"],
                 "error": result["error"],
             }
@@ -1193,7 +1204,7 @@ def print_console_summary(output_path: Path, summary_rows: list[dict[str, Any]])
         print(
             f"{row['solver_family']:>8} | {row['formulation']:<16} | "
             f"status={row['status']:<12} | obj={row['objective_value']} | "
-            f"lb={row['lower_bound']} | wall={row['wall_clock_seconds']:.3f}s"
+            f"lb={row['lower_bound']} | gap={row['optimality_gap'] if row['optimality_gap'] is None else f\"{row['optimality_gap']:.2%}\"} | wall={row['wall_clock_seconds']:.3f}s"
         )
 
 
