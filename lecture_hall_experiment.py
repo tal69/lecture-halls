@@ -630,6 +630,9 @@ def solve_gurobi_quadratic(instance: Instance, time_limit: float, verbose: bool 
         model.setObjective(quicksum(objective_terms), GRB.MINIMIZE)
         model.optimize()
 
+        if model.Status == GRB.INTERRUPTED:
+            raise KeyboardInterrupt("Solver interrupted by user")
+
         wall_seconds = time.perf_counter() - wall_start
         assignment_by_lecture = None
         if model.SolCount > 0:
@@ -746,6 +749,9 @@ def solve_gurobi_linearized(instance: Instance, time_limit: float, verbose: bool
         model.setObjective(quicksum(objective_terms), GRB.MINIMIZE)
         model.optimize()
 
+        if model.Status == GRB.INTERRUPTED:
+            raise KeyboardInterrupt("Solver interrupted by user")
+
         wall_seconds = time.perf_counter() - wall_start
         assignment_by_lecture = None
         if model.SolCount > 0:
@@ -832,6 +838,7 @@ def solve_cp_sat(instance: Instance, time_limit: float, verbose: bool = True) ->
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = time_limit
     solver.parameters.log_search_progress = verbose
+    solver.parameters.catch_sigint_signal = False
     status = solver.Solve(model)
     wall_seconds = time.perf_counter() - wall_start
 
