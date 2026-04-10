@@ -1,0 +1,139 @@
+
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+
+% Core packages
+\usepackage{amsmath,amssymb}
+\usepackage{tikz-cd}
+\usepackage{multicol}
+\usepackage[round,authoryear]{natbib}
+
+% Paragraphs
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{1\baselineskip}
+
+\title{The lecture hall quadratic assignment problem}
+\author{Tal Raviv}
+\date{April 2026}
+
+\begin{document}
+\maketitle
+
+\section{Introduction}
+Universities and colleages often determine the courses timetable well before they assign lectures to specific halls. Once the timetable is fixed and student registration is completed, the institution knows both the size of each lecture and, to some extent, the overlap in enrollment between consecutive lectures. At that stage, the hall-assignment decision can have a substantial effect on student mobility across campus. Assigning consecutive lectures attended by many of the same students to distant halls may generate unnecessary walking, even when every lecture is assigned to a feasible room. In practice, long walks between halls may also cause students to arrive late to their next class, thereby disrupting the beginning of the lecture.
+
+This observation motivates a lecture-hall assignment problem that is separate from the timetabling problem itself. The timetable, including the scheduled time interval of each lecture, is taken as given. The remaining task is to assign lectures to halls in a way that respects room capacities and temporal compatibility, while also reducing the walking burden imposed on students as they move between consecutive classes.
+
+We consider this problem through the following sets:
+\begin{description}
+    \item[Halls ($H$)] Each hall is defined by its capacity and location.
+    \item[Lectures ($L$)] Each lecture is defined by its scheduled time interval and its number of students.
+    \item[Immediate-successor relation ($A$)] A relation $A \subseteq L \times L$, where $(l_1,l_2) \in A$ if lecture $l_2$ is scheduled immediately after lecture $l_1$ for at least one group of students.
+    \end{description}   
+
+The walking distance between each pair of halls $h_1, h_2 \in H$ is given by the distance matrix $d_{h_1,h_2}$. In addition, for each pair of lectures $(l_1,l_2) \in A$, we are given the number of students enrolled in both classes, denoted by $c_{l_1,l_2}$.
+
+
+The goal is to assign each lecture to a hall with sufficient capacity, such that no two lectures assigned to the same hall overlap in time. The objective is to minimize the total walking distance walked by students between consecutive classes.
+
+This problem shares features with both the quadratic assignment problem and interval scheduling, and in a sense it combines elements of both.
+
+\section{Literature review}
+The proposed model is related to three main streams of literature: the quadratic assignment problem (QAP), classroom assignment and interval scheduling, and university course timetabling. The closest conceptual link to the QAP is the presence of pairwise interaction costs: assigning two lectures to two halls creates a cost that depends jointly on the distance between the halls and on the number of students who attend both lectures. This is analogous to the flow--distance structure that defines the classical QAP introduced by \citet{koopmans1957} and surveyed extensively by \citet{burkard1998} and \citet{loiola2007}. At the same time, the present problem differs from the standard QAP because feasibility is driven by temporal overlap, room capacities, and the subset of lecture pairs that are consecutive on the same day.
+
+A second relevant stream concerns classroom assignment and interval-based room allocation. In this family of problems, activities with fixed or partially fixed time intervals must be assigned to rooms while respecting incompatibilities caused by overlap in time. \citet{carter1992} study the classroom assignment problem from a complexity perspective and explicitly connect it to interval scheduling. Their framework is closely related to the feasibility component of the present model, where lectures cannot share a hall if their time intervals overlap. However, the objective considered here is richer because it is not limited to feasibility or room utilization; instead, it introduces interaction costs across consecutive lectures through student flows and hall-to-hall distances.
+
+A third stream is the university timetabling literature, which studies the joint allocation of courses to times and rooms under institutional constraints. General surveys by \citet{schaerf1999} and \citet{burke2002} describe a broad range of formulations, including problems in which room capacities, conflicts, and soft preferences play a central role, while the more recent review of \citet{abdipoor2023} summarizes modern meta-heuristic and hybrid approaches for university course timetabling. Within this literature, classroom assignment is often treated either as a subproblem of course timetabling or as a second-stage problem after times have been fixed. For example, \citet{torres2014} propose a two-phase approach in which course scheduling is followed by classroom assignment, and \citet{rappos2022} develop a mixed-integer programming model that jointly considers student allocation, room assignment, and time-period assignment. More recently, \citet{davison2025} extend university timetabling models to hybrid teaching environments, showing how current formulations continue to expand in response to operational changes in higher education. This decomposition is natural in many university settings and is also compatible with the present formulation, which assumes that the scheduled time interval of each lecture is already known.
+
+Taken together, these three literatures suggest that the lecture hall assignment problem studied here combines structural ingredients that are usually treated separately. From classroom assignment and interval scheduling it inherits the temporal packing constraints on rooms; from timetabling it inherits the academic context, capacity restrictions, and interpretation of lectures as scheduled activities; and from the QAP it inherits a pairwise objective that couples assignment decisions across lectures. A particularly close recent connection is the room-allocation study in \citep{roomalloc2026}, which explicitly minimizes student relocation between buildings and room changes between consecutive classes while enforcing capacity and overlap constraints. This paper is especially relevant to the present model, whose objective is likewise driven by student movement between consecutive lectures. Overall, the present formulation appears to define a distinct optimization model in which room assignment is driven not only by local feasibility, but also by the downstream effect of assignments on student walking distances between consecutive classes.
+
+\paragraph{Research gap and contribution.} Although recent work in university timetabling and room allocation accounts for room capacities, time conflicts, and in some cases student-relocation objectives, existing models are typically embedded in broader timetabling frameworks or treated as multiobjective room-allocation problems; see, for example, \citet{rappos2022}, \citet{davison2025}, and \citep{roomalloc2026}. In contrast, the present study focuses on a fixed-time lecture-hall assignment problem in which feasibility is governed by interval-overlap and capacity constraints, while the objective is a QAP-style quadratic function induced by shared enrollments and inter-hall walking distances. To the best of our knowledge, this combination has not been isolated and studied as a standalone optimization problem. This gap motivates the formulation studied here and suggests that the problem may admit structural properties and solution approaches that differ from those developed for general timetabling models. Moreover, in many academic institutions, timetabling is performed separately and long before lecture-hall assignment: the former is carried out before registration begins, whereas the latter can be completed only after registration is finished and the number of students enrolled in each course is known. Therefore, there is practical value in studying this problem in isolation. 
+
+\section{Modeling}
+For notational convenience, define
+\[
+A' = \{(l_1,l_2) \in A : c_{l_1,l_2} > 0\}.
+\]
+
+A natural nonlinear integer programming formulation is as follows. For each lecture $l \in L$ and each compatible hall $h \in H(l)$, let
+\begin{equation}
+    x_{lh} =
+    \begin{cases}
+        1 & \text{if lecture $l$ is assigned to hall $h$,}\\
+        0 & \text{otherwise.}
+    \end{cases}
+    \label{eq:nlp-x-def}
+\end{equation}
+Let $s_l$ denote the number of students attending lecture $l$, and let $u_h$ denote the capacity of hall $h$. Define $H(l) = \{h \in H : u_h \ge s_l\}$ as the set of halls that are compatible with lecture $l$. In addition, let $T$ be the set of elementary time units in the planning horizon, and for each $t \in T$ let $L(t) \subseteq L$ denote the set of lectures whose scheduled intervals include time unit $t$. The problem can then be written as
+\begin{align}
+    \min \quad & \sum_{(l_1,l_2) \in A'} \sum_{h_1 \in H(l_1)} \sum_{h_2 \in H(l_2)} c_{l_1,l_2} \, d_{h_1,h_2} \, x_{l_1 h_1} x_{l_2 h_2} \label{eq:nlp-obj} \\
+    \text{s.t.} \quad
+    & \sum_{h \in H(l)} x_{lh} = 1, && \forall l \in L, \label{eq:nlp-assign} \\
+    & \sum_{l \in L(t)} x_{lh} \le 1, && \forall t \in T,\ \forall h \in H, \label{eq:nlp-overlap} \\
+    & x_{lh} \in \{0,1\}, && \forall l \in L,\ \forall h \in H(l). \label{eq:nlp-binary}
+\end{align}
+The objective is quadratic because the cost of assigning a lecture to a hall depends on where the immediately succeeding lecture is assigned. The first set of constraints ensures that each lecture is assigned to exactly one compatible hall, and the second is a stronger non-overlap condition: for every hall and every time unit, at most one lecture occupying that time unit may be assigned to that hall.
+
+An immediate structural observation is that the problem is separable by day. Let $D$ denote the set of teaching days, and for each $d \in D$ let $L_d \subseteq L$ be the set of lectures scheduled on day $d$. Likewise, let $A_d \subseteq A$ be the set of successor pairs whose two lectures both belong to day $d$, and let $T_d \subseteq T$ be the set of time units associated with day $d$. Because temporal-overlap constraints involve only lectures that occur on the same day, and because an immediate-successor pair must also lie within a single day, both the objective and the feasibility constraints decompose across days. Therefore, the weekly problem can be written as the sum of independent daily subproblems,
+\begin{equation}
+    \min \sum_{d \in D} f_d(x^d),
+\end{equation}
+where each $f_d$ is the objective induced by the lectures and successor pairs of day $d$, and $x^d$ denotes the hall-assignment decisions for that day. In particular, solving the overall weekly problem is equivalent to solving one independent lecture-hall assignment problem for each day and combining the resulting assignments. This observation is useful both computationally and conceptually, and in what follows one may interpret the model as applying either to the full week or, equivalently, to a single-day instance.
+
+The interval structure also yields a tighter way to express temporal feasibility. Fix a day $d \in D$, and define the interval graph $G_d=(L_d,E_d)$ in which two lectures are adjacent if and only if their scheduled intervals overlap. Since the lecture intervals lie on a line, $G_d$ is an interval graph. Let $\mathcal{C}_d$ denote the family of maximal cliques of $G_d$. Then the slot-indexed constraints \eqref{eq:nlp-overlap} may be replaced by the clique constraints
+\begin{equation}
+    \sum_{l \in C:\, h \in H(l)} x_{lh} \le 1, \qquad \forall d \in D,\ \forall C \in \mathcal{C}_d,\ \forall h \in H.
+    \label{eq:clique-overlap}
+\end{equation}
+This replacement is exact. For every time unit $t$, the set $L(t)$ of lectures active at time $t$ forms a clique in the interval graph, and therefore is contained in a maximal clique. Conversely, by the Helly property of intervals, every clique of an interval graph has a common intersection point, so each maximal clique corresponds to a set of lectures that are simultaneously active at some time. Hence \eqref{eq:clique-overlap} is equivalent to the family of slot-indexed non-overlap constraints, but it is often smaller because many consecutive time units induce identical or nested active sets. The same observation applies to the MILP and CP formulations below: one may replace the time-indexed overlap constraints, or the corresponding \texttt{AllDifferent} constraints, by maximal-clique constraints of the interval graph.
+
+A compact linearization can be obtained by introducing, for each successor pair $(l_1,l_2) \in A$ such that $c_{l_1,l_2} > 0$, one nonnegative continuous variable $y_{l_1 l_2}$ representing the walking cost induced by that pair. The problem can then be reformulated as the mixed-integer linear program
+\begin{align}
+    \min \quad & \sum_{(l_1,l_2) \in A'} y_{l_1 l_2} \label{eq:milp-obj} \\
+    \text{s.t.} \quad
+    & \sum_{h \in H(l)} x_{lh} = 1, && \forall l \in L, \label{eq:milp-assign} \\
+    & \sum_{l \in L(t)} x_{lh} \le 1, && \forall t \in T,\ \forall h \in H, \label{eq:milp-overlap} \\
+    & y_{l_1 l_2} \ge c_{l_1,l_2} \, d_{h_1,h_2}\bigl(x_{l_1 h_1} + x_{l_2 h_2} - 1\bigr), && \forall (l_1,l_2) \in A',  h_1 \in H(l_1), h_2 \in H(l_2), \label{eq:milp-link3} \\
+    & x_{lh} \in \{0,1\}, && \forall l \in L,\ \forall h \in H(l), \label{eq:milp-x-binary} \\
+    & y_{l_1 l_2} \ge 0, && \forall (l_1,l_2) \in A'. \label{eq:milp-y-nonneg}
+\end{align}
+This reformulation is exact. Since each lecture is assigned to exactly one hall, for every pair $(l_1,l_2)$ there is exactly one compatible hall pair $(h_1,h_2)$ for which $x_{l_1 h_1}=x_{l_2 h_2}=1$; for that pair, constraint~\eqref{eq:milp-link3} yields
+\[
+y_{l_1 l_2} \ge c_{l_1,l_2} \, d_{h_1,h_2}.
+\]
+For every other hall pair, the right-hand side of \eqref{eq:milp-link3} is nonpositive. Therefore, because the objective minimizes $\sum y_{l_1 l_2}$ and $y_{l_1 l_2}$ is constrained to be nonnegative, the optimal value of $y_{l_1 l_2}$ is exactly the realized walking cost associated with the halls assigned to $l_1$ and $l_2$. Restricting the $y$ variables to pairs with $c_{l_1,l_2} > 0$ is sufficient, since pairs with zero shared enrollment do not contribute to the objective.
+
+Compared with the more disaggregated linearization that introduces one variable for each tuple $(l_1,l_2,h_1,h_2)$, formulation \eqref{eq:milp-obj}--\eqref{eq:milp-y-nonneg} is substantially more compact in the number of additional variables. However, this compactness does not necessarily imply a stronger linear-programming relaxation.
+
+A constraint-programming (CP) formulation can be made more compact by replacing the binary assignment variables with one integer decision variable $a_l$ for each lecture $l \in L$, where $a_l$ denotes the hall assigned to lecture $l$ and its domain is restricted to the compatible set $H(l)$. The model can then be written as
+\begin{align}
+    \min \quad & \sum_{(l_1,l_2) \in A'} c_{l_1,l_2} \, d_{a_{l_1},a_{l_2}} \label{eq:cpsat-obj} \\
+    \text{s.t.} \quad
+    & a_l \in H(l), && \forall l \in L, \label{eq:cpsat-domain} \\
+    & \text{AllDifferent}(\{a_l : l \in L(t)\}), && \forall t \in T. \label{eq:cpsat-alldiff}
+\end{align}
+Equation~\eqref{eq:cpsat-obj} is the CP objective. It minimizes the total walking burden by summing, over all relevant successor pairs, the shared enrollment $c_{l_1,l_2}$ multiplied by the distance between the halls selected by $a_{l_1}$ and $a_{l_2}$.
+
+Constraint~\eqref{eq:cpsat-domain} defines the assignment variables. Each lecture is assigned directly to one compatible hall, so the capacity requirement is enforced through the domain of $a_l$ rather than through separate binary variables and assignment equalities.
+
+Constraint~\eqref{eq:cpsat-alldiff} enforces temporal feasibility. For every time unit $t$, all lectures active during that time must take distinct hall values, which ensures that no hall is used simultaneously by two overlapping lectures.
+
+This formulation is a compact high-level CP model. In an implementation based on a CP-SAT solver such as OR-Tools, the hall assignments would still be represented directly by integer variables, and mutual exclusivity could be enforced by \texttt{AddAllDifferent}. The objective term $d_{a_{l_1},a_{l_2}}$ may be viewed as concise mathematical shorthand for indexing the distance matrix by decision variables.
+
+If one wants a lower-level encoding that is closer to an actual CP-SAT implementation, one may introduce for each successor pair $(l_1,l_2) \in A$ an auxiliary integer variable $z_{l_1,l_2}$ representing the realized walking distance, together with constraints enforcing
+\begin{equation}
+    z_{l_1,l_2} = d_{a_{l_1},a_{l_2}}.
+    \label{eq:cp-z-def}
+\end{equation}
+Then the objective in \eqref{eq:cpsat-obj} can be replaced by
+\begin{equation}
+    \min \sum_{(l_1,l_2) \in A} c_{l_1,l_2} \, z_{l_1,l_2},
+    \label{eq:cp-z-obj}
+\end{equation}
+and the relation \eqref{eq:cp-z-def} can be encoded in CP-SAT by an element constraint or an allowed-assignment table.
+
+
+\bibliographystyle{plainnat}
+\bibliography{refs}
+
+\end{document}

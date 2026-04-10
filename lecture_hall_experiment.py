@@ -13,6 +13,7 @@ JSON files with the full instance and all solver solutions.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import datetime as dt
 import json
 import math
@@ -81,7 +82,6 @@ class Instance:
     days_per_week: int
     density_target: float
     density_actual: float
-    common_prob: float
     halls: list[Hall]
     lectures: list[Lecture]
     distances: list[list[int]]
@@ -130,14 +130,6 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.9,
         help="Target lecture-slot utilization. Default: 0.9.",
-    )
-    parser.add_argument(
-        "--common-prob",
-        "--common_prob",
-        dest="common_prob",
-        type=float,
-        default=0.3,
-        help="Probability that two consecutive lectures share students. Default: 0.3.",
     )
     parser.add_argument(
         "--time-limit",
@@ -197,8 +189,6 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--slots-per-day must be at least 4 because lectures last 2-4 slots.")
     if not 0 < args.density <= 1:
         raise SystemExit("--density must be in (0, 1].")
-    if not 0 <= args.common_prob <= 1:
-        raise SystemExit("--common-prob must be in [0, 1].")
     if args.time_limit <= 0:
         raise SystemExit("--time-limit must be positive.")
     if args.model is not None:
@@ -377,6 +367,124 @@ def assign_durations_to_bins(
     raise RuntimeError("Failed to pack lecture durations into hall/day bins.")
 
 
+def cohort_slot_is_feasible(
+    slot_usage: dict[tuple[str, int, int], tuple[int, int]],
+    subject: str,
+    study_year: int,
+    is_compulsory: bool,
+    start_slot: int,
+    end_slot: int,
+) -> bool:
+    for slot in range(start_slot, end_slot):
+        compulsory_count, elective_count = slot_usage.get((subject, study_year, slot), (0, 0))
+        if is_compulsory:
+            if compulsory_count >= 1 or elective_count > 0:
+                return False
+        else:
+            if compulsory_count > 0 or elective_count >= 2:
+                return False
+    return True
+
+
+def add_cohort_slot_usage(
+    slot_usage: dict[tuple[str, int, int], tuple[int, int]],
+    subject: str,
+    study_year: int,
+    is_compulsory: bool,
+    start_slot: int,
+    end_slot: int,
+) -> None:
+    for slot in range(start_slot, end_slot):
+        key = (subject, study_year, slot)
+        compulsory_count, elective_count = slot_usage.get(key, (0, 0))
+        if is_compulsory:
+            slot_usage[key] = (compulsory_count + 1, elective_count)
+        else:
+            slot_usage[key] = (compulsory_count, elective_count + 1)
+
+
+def assign_balanced_course_attributes(
+    lecture_slots: list[dict[str, int]],
+    rng: random.Random,
+) -> list[tuple[str, int, bool]]:
+    num_lectures = len(lecture_slots)
+    subject_counts = Counter(balanced_values(SUBJECTS, num_lectures, rng))
+    year_counts = Counter(balanced_values(STUDY_YEARS, num_lectures, rng))
+    course_type_counts = Counter(balanced_course_type_flags(num_lectures, rng))
+
+    for _ in range(200):
+        remaining_subjects = Counter(subject_counts)
+        remaining_years = Counter(year_counts)
+        remaining_types = Counter(course_type_counts)
+        assignments: list[tuple[str, int, bool] | None] = [None] * num_lectures
+        slot_usage: dict[tuple[str, int, int], tuple[int, int]] = {}
+        order = list(range(num_lectures))
+        rng.shuffle(order)
+        order.sort(
+            key=lambda index: (
+                -(lecture_slots[index]["end_slot"] - lecture_slots[index]["start_slot"]),
+                lecture_slots[index]["start_slot"],
+            )
+        )
+
+        success = True
+        for index in order:
+            lecture_slot = lecture_slots[index]
+            start_slot = lecture_slot["start_slot"]
+            end_slot = lecture_slot["end_slot"]
+            candidates: list[tuple[float, str, int, bool]] = []
+
+            for subject, subject_count in remaining_subjects.items():
+                if subject_count <= 0:
+                    continue
+                for study_year, year_count in remaining_years.items():
+                    if year_count <= 0:
+                        continue
+                    for is_compulsory, type_count in remaining_types.items():
+                        if type_count <= 0:
+                            continue
+                        if not cohort_slot_is_feasible(
+                            slot_usage,
+                            subject,
+                            study_year,
+                            is_compulsory,
+                            start_slot,
+                            end_slot,
+                        ):
+                            continue
+
+                        score = (
+                            4.0 * remaining_subjects[subject]
+                            + 3.0 * remaining_years[study_year]
+                            + 2.0 * remaining_types[is_compulsory]
+                            + rng.random()
+                        )
+                        candidates.append((score, subject, study_year, is_compulsory))
+
+            if not candidates:
+                success = False
+                break
+
+            _, subject, study_year, is_compulsory = max(candidates, key=lambda item: item[0])
+            assignments[index] = (subject, study_year, is_compulsory)
+            remaining_subjects[subject] -= 1
+            remaining_years[study_year] -= 1
+            remaining_types[is_compulsory] -= 1
+            add_cohort_slot_usage(
+                slot_usage,
+                subject,
+                study_year,
+                is_compulsory,
+                start_slot,
+                end_slot,
+            )
+
+        if success and all(assignment is not None for assignment in assignments):
+            return [assignment for assignment in assignments if assignment is not None]
+
+    raise RuntimeError("Failed to assign balanced lecture attributes under cohort overlap rules.")
+
+
 def generate_lectures(
     halls: list[Hall],
     slots_per_day: int,
@@ -387,13 +495,8 @@ def generate_lectures(
     target_busy_slots = max(2, min(total_capacity, int(round(density * total_capacity))))
     durations = duration_list_for_total(target_busy_slots, rng)
     bins = assign_durations_to_bins(durations, len(halls), DAYS_PER_WEEK, slots_per_day, rng)
-    num_lectures = len(durations)
-    subject_assignments = balanced_values(SUBJECTS, num_lectures, rng)
-    year_assignments = balanced_values(STUDY_YEARS, num_lectures, rng)
-    course_type_flags = balanced_course_type_flags(num_lectures, rng)
 
-    lectures: list[Lecture] = []
-    lecture_id = 0
+    lecture_slots: list[dict[str, int]] = []
     for bin_info in bins:
         day = int(bin_info["day"])
         hall_id = int(bin_info["hall_id"])
@@ -408,24 +511,39 @@ def generate_lectures(
             start_slot_in_day = current
             start_slot = day * slots_per_day + start_slot_in_day
             end_slot = start_slot + duration
-            lectures.append(
-                Lecture(
-                    lecture_id=lecture_id,
-                    name=f"L{lecture_id + 1}",
-                    subject=subject_assignments[lecture_id],
-                    study_year=year_assignments[lecture_id],
-                    is_compulsory=course_type_flags[lecture_id],
-                    day=day,
-                    start_slot_in_day=start_slot_in_day,
-                    duration=duration,
-                    start_slot=start_slot,
-                    end_slot=end_slot,
-                    students=0,
-                    hidden_hall=hall_id,
-                )
+            lecture_slots.append(
+                {
+                    "hall_id": hall_id,
+                    "day": day,
+                    "start_slot_in_day": start_slot_in_day,
+                    "duration": duration,
+                    "start_slot": start_slot,
+                    "end_slot": end_slot,
+                }
             )
-            lecture_id += 1
             current += duration + gaps[index + 1]
+
+    attribute_assignments = assign_balanced_course_attributes(lecture_slots, rng)
+
+    lectures: list[Lecture] = []
+    for lecture_id, (lecture_slot, assignment) in enumerate(zip(lecture_slots, attribute_assignments, strict=True)):
+        subject, study_year, is_compulsory = assignment
+        lectures.append(
+            Lecture(
+                lecture_id=lecture_id,
+                name=f"L{lecture_id + 1}",
+                subject=subject,
+                study_year=study_year,
+                is_compulsory=is_compulsory,
+                day=lecture_slot["day"],
+                start_slot_in_day=lecture_slot["start_slot_in_day"],
+                duration=lecture_slot["duration"],
+                start_slot=lecture_slot["start_slot"],
+                end_slot=lecture_slot["end_slot"],
+                students=0,
+                hidden_hall=lecture_slot["hall_id"],
+            )
+        )
     lectures.sort(key=lambda lecture: (lecture.day, lecture.start_slot_in_day, lecture.lecture_id))
     return lectures
 
@@ -506,13 +624,11 @@ def first_lecture_weight(
 def journey_stop_probability(
     accumulated_slots: int,
     classes_taken: int,
-    common_prob: float,
     slots_per_day: int,
     best_next_affinity: float,
 ) -> float:
     progress = accumulated_slots / max(1, slots_per_day)
-    base = 0.08 + 0.10 * (1.0 - common_prob)
-    base_stop_probability = base + 0.10 * max(0, classes_taken - 1) + 0.52 * (progress ** 1.7)
+    base_stop_probability = 0.14 + 0.10 * max(0, classes_taken - 1) + 0.52 * (progress ** 1.7)
     base_stop_probability = min(0.97, max(0.05, base_stop_probability))
 
     # The decision to continue depends on how compatible the next available
@@ -544,7 +660,6 @@ def simulate_student_journeys(
     lectures: list[Lecture],
     halls: list[Hall],
     slots_per_day: int,
-    common_prob: float,
     rng: random.Random,
 ) -> tuple[list[Lecture], dict[tuple[int, int], int]]:
     successor_map = build_successor_map(lectures)
@@ -553,7 +668,7 @@ def simulate_student_journeys(
     common_students: dict[tuple[int, int], int] = {}
 
     total_target = sum(targets.values())
-    expected_classes_per_student = 2.0 + common_prob
+    expected_classes_per_student = 2.3
     total_students = max(
         len(lectures),
         int(math.ceil(1.08 * total_target / max(1.0, expected_classes_per_student))),
@@ -610,7 +725,6 @@ def simulate_student_journeys(
                 stop_probability = journey_stop_probability(
                     accumulated_slots,
                     classes_taken,
-                    common_prob,
                     slots_per_day,
                     max(
                         student_course_affinity(student_subject, student_year, next_lecture)
@@ -671,7 +785,6 @@ def build_instance(
     slots_per_day: int,
     seed: int,
     density: float,
-    common_prob: float,
 ) -> Instance:
     rng = random.Random(seed)
     halls = generate_halls(num_halls, rng)
@@ -681,7 +794,6 @@ def build_instance(
         lectures=lectures,
         halls=halls,
         slots_per_day=slots_per_day,
-        common_prob=common_prob,
         rng=rng,
     )
     compatibility = {
@@ -707,7 +819,6 @@ def build_instance(
         days_per_week=DAYS_PER_WEEK,
         density_target=density,
         density_actual=density_actual,
-        common_prob=common_prob,
         halls=halls,
         lectures=lectures,
         distances=distances,
@@ -1366,7 +1477,6 @@ def build_summary_rows(
                 "time_horizon_slots": instance.days_per_week * instance.slots_per_day,
                 "density_target": instance.density_target,
                 "density_actual": instance.density_actual,
-                "common_prob": instance.common_prob,
                 "time_limit_seconds": time_limit,
                 "linearized_cuts": cuts_enabled,
                 "num_lectures": len(instance.lectures),
@@ -1490,7 +1600,6 @@ def instance_to_json_dict(instance: Instance) -> dict[str, Any]:
         "days_per_week": instance.days_per_week,
         "density_target": instance.density_target,
         "density_actual": instance.density_actual,
-        "common_prob": instance.common_prob,
         "halls": [
             {
                 "hall_id": hall.hall_id,
@@ -1624,7 +1733,6 @@ def main() -> None:
             slots_per_day=args.slots_per_day,
             seed=seed,
             density=args.density,
-            common_prob=args.common_prob,
         )
 
         if args.model is None:

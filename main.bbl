@@ -1,0 +1,97 @@
+\begin{thebibliography}{11}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Abdipoor et~al.(2023)Abdipoor, Yaakob, Goh, and
+  Abdullah]{abdipoor2023}
+Sina Abdipoor, Razali Yaakob, Say~Leng Goh, and Salwani Abdullah.
+\newblock Meta-heuristic approaches for the university course timetabling
+  problem.
+\newblock \emph{Intelligent Systems with Applications}, 19:\penalty0 200253,
+  2023.
+\newblock \doi{10.1016/j.iswa.2023.200253}.
+
+\bibitem[Antunes-Batista et~al.(2026)Antunes-Batista, Atta, Basto-Fernandes,
+  Yevseyeva, and Emmerich]{roomalloc2026}
+Bruno Antunes-Batista, Soumen Atta, V{\'i}tor Basto-Fernandes, Iryna Yevseyeva,
+  and Michael T.~M. Emmerich.
+\newblock Multiobjective optimization approaches for room allocation in
+  university course timetabling.
+\newblock \emph{Procedia Computer Science}, 278:\penalty0 663--670, 2026.
+\newblock \doi{10.1016/j.procs.2026.03.037}.
+
+\bibitem[Burkard et~al.(1998)Burkard, {\c{C}}ela, Pardalos, and
+  Pitsoulis]{burkard1998}
+Rainer~E. Burkard, Eranda {\c{C}}ela, Panos~M. Pardalos, and Leonidas~S.
+  Pitsoulis.
+\newblock The quadratic assignment problem.
+\newblock In \emph{Handbook of Combinatorial Optimization}, pages 241--338.
+  Kluwer Academic Publishers, 1998.
+
+\bibitem[Burke and Petrovic(2002)]{burke2002}
+Edmund~K. Burke and Sanja Petrovic.
+\newblock Recent research directions in automated timetabling.
+\newblock \emph{European Journal of Operational Research}, 140\penalty0
+  (2):\penalty0 266--280, 2002.
+\newblock \doi{10.1016/S0377-2217(02)00069-3}.
+
+\bibitem[Carter and Tovey(1992)]{carter1992}
+Michael~W. Carter and Craig~A. Tovey.
+\newblock When is the classroom assignment problem hard?
+\newblock \emph{Operations Research}, 40\penalty0 (1-Supplement-1):\penalty0
+  S28--S39, 1992.
+\newblock \doi{10.1287/opre.40.1.S28}.
+
+\bibitem[Davison et~al.(2025)Davison, Kheiri, and Zografos]{davison2025}
+Matthew Davison, Ahmed Kheiri, and Konstantinos~G. Zografos.
+\newblock Modelling and solving the university course timetabling problem with
+  hybrid teaching considerations.
+\newblock \emph{Journal of Scheduling}, 28\penalty0 (2):\penalty0 195--215,
+  2025.
+\newblock \doi{10.1007/s10951-024-00817-w}.
+
+\bibitem[Koopmans and Beckmann(1957)]{koopmans1957}
+Tjalling~C. Koopmans and Martin Beckmann.
+\newblock Assignment problems and the location of economic activities.
+\newblock \emph{Econometrica}, 25\penalty0 (1):\penalty0 53--76, 1957.
+\newblock \doi{10.2307/1907742}.
+
+\bibitem[Loiola et~al.(2007)Loiola, de~Abreu, Boaventura-Netto, Hahn, and
+  Querido]{loiola2007}
+Eliane~M. Loiola, Nair Maria~Maia de~Abreu, Paulo~Oswaldo Boaventura-Netto,
+  Peter Hahn, and Tania Querido.
+\newblock A survey for the quadratic assignment problem.
+\newblock \emph{European Journal of Operational Research}, 176\penalty0
+  (2):\penalty0 657--690, 2007.
+\newblock \doi{10.1016/j.ejor.2005.09.032}.
+
+\bibitem[Rappos et~al.(2022)Rappos, Thi{'e}mard, Robert, and
+  H{\^e}che]{rappos2022}
+Efstratios Rappos, Eric Thi{'e}mard, Stephan Robert, and Jean-Fran{\c{c}}ois
+  H{\^e}che.
+\newblock A mixed-integer programming approach for solving university course
+  timetabling problems.
+\newblock \emph{Journal of Scheduling}, 25\penalty0 (4):\penalty0 391--404,
+  2022.
+\newblock \doi{10.1007/s10951-021-00715-5}.
+
+\bibitem[Schaerf(1999)]{schaerf1999}
+Andrea Schaerf.
+\newblock A survey of automated timetabling.
+\newblock \emph{Artificial Intelligence Review}, 13\penalty0 (2):\penalty0
+  87--127, 1999.
+\newblock \doi{10.1023/A:1006576209967}.
+
+\bibitem[Torres-Ovalle et~al.(2014)Torres-Ovalle, Montoya-Torres,
+  Quintero-Araujo, and Sarmiento]{torres2014}
+Camilo Torres-Ovalle, Jairo~R. Montoya-Torres, Carlos Quintero-Araujo, and
+  Angelica Sarmiento.
+\newblock University course scheduling and classroom assignment.
+\newblock \emph{Ingenier\'{i}a y Universidad}, 18\penalty0 (1):\penalty0
+  59--75, 2014.
+\newblock \doi{10.11144/Javeriana.IYU18-1.ucsc}.
+
+\end{thebibliography}
