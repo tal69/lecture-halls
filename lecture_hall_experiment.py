@@ -35,6 +35,18 @@ from ortools.sat.python import cp_model
 
 # The problem is separable by day, so each generated instance is a single-day instance.
 DAYS_PER_WEEK = 1
+SUBJECTS = (
+    "Mathematics",
+    "Physics",
+    "ComputerScience",
+    "Economics",
+    "History",
+    "Biology",
+    "Chemistry",
+    "Psychology",
+)
+STUDY_YEARS = (1, 2, 3, 4)
+STUDY_YEAR_WEIGHTS = (0.32, 0.28, 0.24, 0.16)
 
 
 @dataclass(frozen=True)
@@ -50,6 +62,8 @@ class Hall:
 class Lecture:
     lecture_id: int
     name: str
+    subject: str
+    study_year: int
     day: int
     start_slot_in_day: int
     duration: int
@@ -360,10 +374,14 @@ def generate_lectures(
             end_slot = start_slot + duration
             lower = max(10, int(math.ceil(0.45 * hall.capacity)))
             students = rng.randint(lower, hall.capacity)
+            subject = rng.choice(SUBJECTS)
+            study_year = rng.choices(STUDY_YEARS, weights=STUDY_YEAR_WEIGHTS, k=1)[0]
             lectures.append(
                 Lecture(
                     lecture_id=lecture_id,
                     name=f"L{lecture_id + 1}",
+                    subject=subject,
+                    study_year=study_year,
                     day=day,
                     start_slot_in_day=start_slot_in_day,
                     duration=duration,
@@ -377,6 +395,30 @@ def generate_lectures(
             current += duration + gaps[index + 1]
     lectures.sort(key=lambda lecture: (lecture.day, lecture.start_slot_in_day, lecture.lecture_id))
     return lectures
+
+
+def transition_affinity(prev_lecture: Lecture, next_lecture: Lecture) -> float:
+    year_gap = abs(prev_lecture.study_year - next_lecture.study_year)
+    if year_gap == 0:
+        year_factor = 1.0
+    elif year_gap == 1:
+        year_factor = 0.28
+    elif year_gap == 2:
+        year_factor = 0.04
+    else:
+        year_factor = 0.005
+
+    subject_factor = 1.0 if prev_lecture.subject == next_lecture.subject else 0.25
+    return year_factor * subject_factor
+
+
+def transition_probability(
+    prev_lecture: Lecture,
+    next_lecture: Lecture,
+    common_prob: float,
+) -> float:
+    probability = common_prob * 3.0 * transition_affinity(prev_lecture, next_lecture)
+    return min(0.95, probability)
 
 
 def generate_common_students(
@@ -397,15 +439,18 @@ def generate_common_students(
         if not prev_lectures:
             continue
 
-        selected_edges: set[tuple[int, int]] = set()
+        selected_successors: dict[int, list[Lecture]] = {}
+        transition_scores: dict[tuple[int, int], float] = {}
         for prev_lecture in prev_lectures:
             for next_lecture in next_lectures:
                 pair = (prev_lecture.lecture_id, next_lecture.lecture_id)
                 all_candidate_pairs.append(pair)
-                if rng.random() <= common_prob:
-                    selected_edges.add(pair)
+                probability = transition_probability(prev_lecture, next_lecture, common_prob)
+                transition_scores[pair] = transition_affinity(prev_lecture, next_lecture)
+                if rng.random() <= probability:
+                    selected_successors.setdefault(prev_lecture.lecture_id, []).append(next_lecture)
 
-        if not selected_edges:
+        if not selected_successors:
             continue
 
         remaining_in = {lecture.lecture_id: lecture.students for lecture in next_lectures}
@@ -414,10 +459,8 @@ def generate_common_students(
 
         for prev_lecture in prev_order:
             eligible_successors = [
-                lecture
-                for lecture in next_lectures
-                if (prev_lecture.lecture_id, lecture.lecture_id) in selected_edges
-                and remaining_in[lecture.lecture_id] > 0
+                lecture for lecture in selected_successors.get(prev_lecture.lecture_id, [])
+                if remaining_in[lecture.lecture_id] > 0
             ]
             if not eligible_successors:
                 continue
@@ -429,18 +472,19 @@ def generate_common_students(
             if max_out <= 0:
                 continue
 
-            max_target = min(max_out, max(1, int(math.ceil(0.6 * prev_lecture.students))))
+            affinities = [
+                transition_scores[(prev_lecture.lecture_id, lecture.lecture_id)]
+                for lecture in eligible_successors
+            ]
+            best_affinity = max(affinities)
+            average_affinity = sum(affinities) / len(affinities)
+            max_share_fraction = min(0.6, 0.05 + 0.45 * best_affinity + 0.10 * average_affinity)
+            max_target = min(
+                max_out,
+                max(1, int(math.ceil(max_share_fraction * prev_lecture.students))),
+            )
             target_out = rng.randint(1, max_target)
-            rng.shuffle(eligible_successors)
-
-            guaranteed_successors = eligible_successors[: min(len(eligible_successors), target_out)]
-            for successor in guaranteed_successors:
-                common_students[(prev_lecture.lecture_id, successor.lecture_id)] = (
-                    common_students.get((prev_lecture.lecture_id, successor.lecture_id), 0) + 1
-                )
-                remaining_in[successor.lecture_id] -= 1
-
-            remaining_out = target_out - len(guaranteed_successors)
+            remaining_out = target_out
             while remaining_out > 0:
                 available_successors = [
                     lecture for lecture in eligible_successors if remaining_in[lecture.lecture_id] > 0
@@ -449,7 +493,11 @@ def generate_common_students(
                     break
                 successor = rng.choices(
                     available_successors,
-                    weights=[remaining_in[lecture.lecture_id] for lecture in available_successors],
+                    weights=[
+                        remaining_in[lecture.lecture_id]
+                        * (0.05 + 4.0 * transition_scores[(prev_lecture.lecture_id, lecture.lecture_id)])
+                        for lecture in available_successors
+                    ],
                     k=1,
                 )[0]
                 common_students[(prev_lecture.lecture_id, successor.lecture_id)] = (
@@ -460,9 +508,21 @@ def generate_common_students(
 
     if not common_students and all_candidate_pairs and common_prob > 0:
         lecture_map = {lecture.lecture_id: lecture for lecture in lectures}
-        lecture_id_1, lecture_id_2 = rng.choice(all_candidate_pairs)
+        lecture_id_1, lecture_id_2 = rng.choices(
+            all_candidate_pairs,
+            weights=[
+                transition_probability(lecture_map[pair[0]], lecture_map[pair[1]], common_prob)
+                for pair in all_candidate_pairs
+            ],
+            k=1,
+        )[0]
         max_shared = min(lecture_map[lecture_id_1].students, lecture_map[lecture_id_2].students)
-        common_students[(lecture_id_1, lecture_id_2)] = max(1, min(max_shared, int(round(0.2 * max_shared))))
+        affinity = transition_affinity(lecture_map[lecture_id_1], lecture_map[lecture_id_2])
+        target_fraction = min(0.25, 0.02 + 0.25 * affinity)
+        common_students[(lecture_id_1, lecture_id_2)] = max(
+            1,
+            min(max_shared, int(math.ceil(target_fraction * max_shared))),
+        )
     return common_students
 
 
@@ -509,6 +569,46 @@ def build_instance(
         compatibility=compatibility,
         active_lectures_by_slot=active_lectures_by_slot,
     )
+
+
+def count_decomposition_connected_components(instance: Instance) -> int:
+    adjacency: dict[int, set[int]] = {
+        lecture.lecture_id: set() for lecture in instance.lectures
+    }
+
+    # Successor arcs induce objective coupling.
+    for lecture_id_1, lecture_id_2 in instance.common_students:
+        adjacency[lecture_id_1].add(lecture_id_2)
+        adjacency[lecture_id_2].add(lecture_id_1)
+
+    # Overlap edges induce room-competition coupling.
+    for active_lectures in instance.active_lectures_by_slot.values():
+        if len(active_lectures) <= 1:
+            continue
+        for index, lecture_id_1 in enumerate(active_lectures):
+            for lecture_id_2 in active_lectures[index + 1 :]:
+                adjacency[lecture_id_1].add(lecture_id_2)
+                adjacency[lecture_id_2].add(lecture_id_1)
+
+    visited: set[int] = set()
+    component_count = 0
+    for lecture in instance.lectures:
+        lecture_id = lecture.lecture_id
+        if lecture_id in visited:
+            continue
+
+        component_count += 1
+        stack = [lecture_id]
+        visited.add(lecture_id)
+        while stack:
+            current = stack.pop()
+            for neighbor in adjacency[current]:
+                if neighbor in visited:
+                    continue
+                visited.add(neighbor)
+                stack.append(neighbor)
+
+    return component_count
 
 
 def safe_float(value: Any) -> float | None:
@@ -561,6 +661,8 @@ def assignment_details_from_map(
             {
                 "lecture_id": lecture.lecture_id,
                 "lecture_name": lecture.name,
+                "subject": lecture.subject,
+                "study_year": lecture.study_year,
                 "day": lecture.day,
                 "start_slot": lecture.start_slot,
                 "end_slot": lecture.end_slot,
@@ -1060,6 +1162,7 @@ def build_summary_rows(
     sizes = [lecture.students for lecture in instance.lectures]
     capacities = [hall.capacity for hall in instance.halls]
     common_values = list(instance.common_students.values())
+    decomposition_connected_components = count_decomposition_connected_components(instance)
     candidate_successors = sum(
         1
         for lecture in instance.lectures
@@ -1132,6 +1235,7 @@ def build_summary_rows(
                 "max_hall_capacity": max(capacities),
                 "candidate_successor_pairs": candidate_successors,
                 "successor_pairs_with_common_students": len(instance.common_students),
+                "decomposition_connected_components": decomposition_connected_components,
                 "avg_common_students": (
                     sum(common_values) / len(common_values) if common_values else 0.0
                 ),
@@ -1254,6 +1358,8 @@ def instance_to_json_dict(instance: Instance) -> dict[str, Any]:
             {
                 "lecture_id": lecture.lecture_id,
                 "lecture_name": lecture.name,
+                "subject": lecture.subject,
+                "study_year": lecture.study_year,
                 "day": lecture.day,
                 "start_slot_in_day": lecture.start_slot_in_day,
                 "duration": lecture.duration,
