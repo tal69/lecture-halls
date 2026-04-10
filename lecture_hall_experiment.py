@@ -1201,10 +1201,11 @@ def print_console_summary(output_path: Path, summary_rows: list[dict[str, Any]])
     print(f"Results written to: {output_path}")
     print("")
     for row in summary_rows:
+        gap_str = str(row['optimality_gap']) if row['optimality_gap'] is None else f"{row['optimality_gap']:.2%}"
         print(
             f"{row['solver_family']:>8} | {row['formulation']:<16} | "
             f"status={row['status']:<12} | obj={row['objective_value']} | "
-            f"lb={row['lower_bound']} | gap={row['optimality_gap'] if row['optimality_gap'] is None else f\"{row['optimality_gap']:.2%}\"} | wall={row['wall_clock_seconds']:.3f}s"
+            f"lb={row['lower_bound']} | gap={gap_str} | wall={row['wall_clock_seconds']:.3f}s"
         )
 
 
