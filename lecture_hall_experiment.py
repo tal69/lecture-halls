@@ -22,7 +22,7 @@ import random
 import socket
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +46,6 @@ SUBJECTS = (
     "Psychology",
 )
 STUDY_YEARS = (1, 2, 3, 4)
-STUDY_YEAR_WEIGHTS = (0.32, 0.28, 0.24, 0.16)
 
 
 @dataclass(frozen=True)
@@ -64,6 +63,7 @@ class Lecture:
     name: str
     subject: str
     study_year: int
+    is_compulsory: bool
     day: int
     start_slot_in_day: int
     duration: int
@@ -261,6 +261,39 @@ def random_partition(total: int, parts: int, rng: random.Random) -> list[int]:
     return values
 
 
+def balanced_values(values: tuple[Any, ...] | list[Any], count: int, rng: random.Random) -> list[Any]:
+    base_values = list(values)
+    if count <= 0:
+        return []
+    full_repeats, remainder = divmod(count, len(base_values))
+    result = base_values * full_repeats
+    if remainder:
+        result.extend(rng.sample(base_values, remainder))
+    rng.shuffle(result)
+    return result
+
+
+def balanced_course_type_flags(count: int, rng: random.Random) -> list[bool]:
+    if count <= 0:
+        return []
+    compulsory_count = int(round(0.70 * count))
+    if count >= 2:
+        compulsory_count = min(count - 1, max(1, compulsory_count))
+    else:
+        compulsory_count = count
+    flags = [True] * compulsory_count + [False] * (count - compulsory_count)
+    rng.shuffle(flags)
+    return flags
+
+
+def generate_student_profiles(num_students: int, rng: random.Random) -> list[tuple[str, int]]:
+    subjects = balanced_values(SUBJECTS, num_students, rng)
+    study_years = balanced_values(STUDY_YEARS, num_students, rng)
+    profiles = list(zip(subjects, study_years, strict=True))
+    rng.shuffle(profiles)
+    return profiles
+
+
 def duration_list_for_total(total_busy_slots: int, rng: random.Random) -> list[int]:
     durations: list[int] = []
     remaining = total_busy_slots
@@ -354,13 +387,16 @@ def generate_lectures(
     target_busy_slots = max(2, min(total_capacity, int(round(density * total_capacity))))
     durations = duration_list_for_total(target_busy_slots, rng)
     bins = assign_durations_to_bins(durations, len(halls), DAYS_PER_WEEK, slots_per_day, rng)
+    num_lectures = len(durations)
+    subject_assignments = balanced_values(SUBJECTS, num_lectures, rng)
+    year_assignments = balanced_values(STUDY_YEARS, num_lectures, rng)
+    course_type_flags = balanced_course_type_flags(num_lectures, rng)
 
     lectures: list[Lecture] = []
     lecture_id = 0
     for bin_info in bins:
         day = int(bin_info["day"])
         hall_id = int(bin_info["hall_id"])
-        hall = halls[hall_id]
         day_durations = list(bin_info["durations"])
         if not day_durations:
             continue
@@ -372,22 +408,19 @@ def generate_lectures(
             start_slot_in_day = current
             start_slot = day * slots_per_day + start_slot_in_day
             end_slot = start_slot + duration
-            lower = max(10, int(math.ceil(0.45 * hall.capacity)))
-            students = rng.randint(lower, hall.capacity)
-            subject = rng.choice(SUBJECTS)
-            study_year = rng.choices(STUDY_YEARS, weights=STUDY_YEAR_WEIGHTS, k=1)[0]
             lectures.append(
                 Lecture(
                     lecture_id=lecture_id,
                     name=f"L{lecture_id + 1}",
-                    subject=subject,
-                    study_year=study_year,
+                    subject=subject_assignments[lecture_id],
+                    study_year=year_assignments[lecture_id],
+                    is_compulsory=course_type_flags[lecture_id],
                     day=day,
                     start_slot_in_day=start_slot_in_day,
                     duration=duration,
                     start_slot=start_slot,
                     end_slot=end_slot,
-                    students=students,
+                    students=0,
                     hidden_hall=hall_id,
                 )
             )
@@ -397,133 +430,240 @@ def generate_lectures(
     return lectures
 
 
-def transition_affinity(prev_lecture: Lecture, next_lecture: Lecture) -> float:
-    year_gap = abs(prev_lecture.study_year - next_lecture.study_year)
-    if year_gap == 0:
-        year_factor = 1.0
+def student_course_affinity(student_subject: str, student_year: int, lecture: Lecture) -> float:
+    year_gap = abs(student_year - lecture.study_year)
+    same_subject = student_subject == lecture.subject
+    if year_gap == 0 and same_subject:
+        base = 1.0
+    elif year_gap == 0:
+        base = 0.28
+    elif year_gap == 1 and same_subject:
+        base = 0.18
     elif year_gap == 1:
-        year_factor = 0.28
+        base = 0.07
+    elif year_gap == 2 and same_subject:
+        base = 0.012
     elif year_gap == 2:
-        year_factor = 0.04
+        base = 0.002
+    elif same_subject:
+        base = 0.0008
     else:
-        year_factor = 0.005
+        base = 0.0001
 
-    subject_factor = 1.0 if prev_lecture.subject == next_lecture.subject else 0.25
-    return year_factor * subject_factor
-
-
-def transition_probability(
-    prev_lecture: Lecture,
-    next_lecture: Lecture,
-    common_prob: float,
-) -> float:
-    probability = common_prob * 3.0 * transition_affinity(prev_lecture, next_lecture)
-    return min(0.95, probability)
+    course_type_multiplier = 1.0 if lecture.is_compulsory else 0.55
+    return base * course_type_multiplier
 
 
-def generate_common_students(
+def generate_enrollment_targets(
     lectures: list[Lecture],
-    common_prob: float,
+    halls: list[Hall],
     rng: random.Random,
-) -> dict[tuple[int, int], int]:
+) -> dict[int, int]:
+    targets: dict[int, int] = {}
+    for lecture in lectures:
+        hall_capacity = halls[lecture.hidden_hall].capacity
+        fill_ratio = rng.uniform(0.85, 0.97)
+        targets[lecture.lecture_id] = max(8, int(math.ceil(fill_ratio * hall_capacity)))
+    return targets
+
+
+def build_successor_map(lectures: list[Lecture]) -> dict[int, list[Lecture]]:
     starts_by_day_slot: dict[tuple[int, int], list[Lecture]] = {}
     ends_by_day_slot: dict[tuple[int, int], list[Lecture]] = {}
     for lecture in lectures:
         starts_by_day_slot.setdefault((lecture.day, lecture.start_slot), []).append(lecture)
         ends_by_day_slot.setdefault((lecture.day, lecture.end_slot), []).append(lecture)
 
-    all_candidate_pairs: list[tuple[int, int]] = []
-    common_students: dict[tuple[int, int], int] = {}
+    successor_map: dict[int, list[Lecture]] = {lecture.lecture_id: [] for lecture in lectures}
     for key, next_lectures in starts_by_day_slot.items():
         prev_lectures = ends_by_day_slot.get(key, [])
         if not prev_lectures:
             continue
-
-        selected_successors: dict[int, list[Lecture]] = {}
-        transition_scores: dict[tuple[int, int], float] = {}
         for prev_lecture in prev_lectures:
-            for next_lecture in next_lectures:
-                pair = (prev_lecture.lecture_id, next_lecture.lecture_id)
-                all_candidate_pairs.append(pair)
-                probability = transition_probability(prev_lecture, next_lecture, common_prob)
-                transition_scores[pair] = transition_affinity(prev_lecture, next_lecture)
-                if rng.random() <= probability:
-                    selected_successors.setdefault(prev_lecture.lecture_id, []).append(next_lecture)
+            successor_map[prev_lecture.lecture_id].extend(next_lectures)
+    return successor_map
 
-        if not selected_successors:
-            continue
 
-        remaining_in = {lecture.lecture_id: lecture.students for lecture in next_lectures}
-        prev_order = list(prev_lectures)
-        rng.shuffle(prev_order)
+def first_lecture_weight(
+    student_subject: str,
+    student_year: int,
+    lecture: Lecture,
+    attendance: dict[int, int],
+    targets: dict[int, int],
+    halls: list[Hall],
+) -> float:
+    capacity = halls[lecture.hidden_hall].capacity
+    remaining_capacity = capacity - attendance[lecture.lecture_id]
+    if remaining_capacity <= 0:
+        return 0.0
 
-        for prev_lecture in prev_order:
-            eligible_successors = [
-                lecture for lecture in selected_successors.get(prev_lecture.lecture_id, [])
-                if remaining_in[lecture.lecture_id] > 0
-            ]
-            if not eligible_successors:
-                continue
+    remaining_target = max(0, targets[lecture.lecture_id] - attendance[lecture.lecture_id])
+    slot_factor = math.exp(-0.28 * lecture.start_slot_in_day)
+    affinity = student_course_affinity(student_subject, student_year, lecture)
+    return affinity * slot_factor * (remaining_target + 0.10 * remaining_capacity)
 
-            max_out = min(
-                prev_lecture.students,
-                sum(remaining_in[lecture.lecture_id] for lecture in eligible_successors),
-            )
-            if max_out <= 0:
-                continue
 
-            affinities = [
-                transition_scores[(prev_lecture.lecture_id, lecture.lecture_id)]
-                for lecture in eligible_successors
-            ]
-            best_affinity = max(affinities)
-            average_affinity = sum(affinities) / len(affinities)
-            max_share_fraction = min(0.6, 0.05 + 0.45 * best_affinity + 0.10 * average_affinity)
-            max_target = min(
-                max_out,
-                max(1, int(math.ceil(max_share_fraction * prev_lecture.students))),
-            )
-            target_out = rng.randint(1, max_target)
-            remaining_out = target_out
-            while remaining_out > 0:
-                available_successors = [
-                    lecture for lecture in eligible_successors if remaining_in[lecture.lecture_id] > 0
-                ]
-                if not available_successors:
-                    break
-                successor = rng.choices(
-                    available_successors,
-                    weights=[
-                        remaining_in[lecture.lecture_id]
-                        * (0.05 + 4.0 * transition_scores[(prev_lecture.lecture_id, lecture.lecture_id)])
-                        for lecture in available_successors
-                    ],
-                    k=1,
-                )[0]
-                common_students[(prev_lecture.lecture_id, successor.lecture_id)] = (
-                    common_students.get((prev_lecture.lecture_id, successor.lecture_id), 0) + 1
+def journey_stop_probability(
+    accumulated_slots: int,
+    classes_taken: int,
+    common_prob: float,
+    slots_per_day: int,
+    best_next_affinity: float,
+) -> float:
+    progress = accumulated_slots / max(1, slots_per_day)
+    base = 0.08 + 0.10 * (1.0 - common_prob)
+    base_stop_probability = base + 0.10 * max(0, classes_taken - 1) + 0.52 * (progress ** 1.7)
+    base_stop_probability = min(0.97, max(0.05, base_stop_probability))
+
+    # The decision to continue depends on how compatible the next available
+    # lectures are with the student's current topic/year trajectory.
+    continue_factor = min(1.0, 0.03 + 5.0 * best_next_affinity)
+    continue_probability = (1.0 - base_stop_probability) * continue_factor
+    return min(0.995, max(0.05, 1.0 - continue_probability))
+
+
+def next_lecture_weight(
+    student_subject: str,
+    student_year: int,
+    next_lecture: Lecture,
+    attendance: dict[int, int],
+    targets: dict[int, int],
+    halls: list[Hall],
+) -> float:
+    capacity = halls[next_lecture.hidden_hall].capacity
+    remaining_capacity = capacity - attendance[next_lecture.lecture_id]
+    if remaining_capacity <= 0:
+        return 0.0
+
+    remaining_target = max(0, targets[next_lecture.lecture_id] - attendance[next_lecture.lecture_id])
+    affinity = student_course_affinity(student_subject, student_year, next_lecture)
+    return (affinity ** 1.15) * (remaining_target + 0.08 * remaining_capacity)
+
+
+def simulate_student_journeys(
+    lectures: list[Lecture],
+    halls: list[Hall],
+    slots_per_day: int,
+    common_prob: float,
+    rng: random.Random,
+) -> tuple[list[Lecture], dict[tuple[int, int], int]]:
+    successor_map = build_successor_map(lectures)
+    targets = generate_enrollment_targets(lectures, halls, rng)
+    attendance = {lecture.lecture_id: 0 for lecture in lectures}
+    common_students: dict[tuple[int, int], int] = {}
+
+    total_target = sum(targets.values())
+    expected_classes_per_student = 2.0 + common_prob
+    total_students = max(
+        len(lectures),
+        int(math.ceil(1.08 * total_target / max(1.0, expected_classes_per_student))),
+    )
+
+    def simulate_batch(num_students: int) -> None:
+        for student_subject, student_year in generate_student_profiles(num_students, rng):
+            first_candidates = []
+            first_weights = []
+            for lecture in lectures:
+                weight = first_lecture_weight(
+                    student_subject,
+                    student_year,
+                    lecture,
+                    attendance,
+                    targets,
+                    halls,
                 )
-                remaining_in[successor.lecture_id] -= 1
-                remaining_out -= 1
+                if weight <= 0:
+                    continue
+                first_candidates.append(lecture)
+                first_weights.append(weight)
+            if not first_candidates:
+                return
 
-    if not common_students and all_candidate_pairs and common_prob > 0:
-        lecture_map = {lecture.lecture_id: lecture for lecture in lectures}
-        lecture_id_1, lecture_id_2 = rng.choices(
-            all_candidate_pairs,
-            weights=[
-                transition_probability(lecture_map[pair[0]], lecture_map[pair[1]], common_prob)
-                for pair in all_candidate_pairs
-            ],
-            k=1,
-        )[0]
-        max_shared = min(lecture_map[lecture_id_1].students, lecture_map[lecture_id_2].students)
-        affinity = transition_affinity(lecture_map[lecture_id_1], lecture_map[lecture_id_2])
-        target_fraction = min(0.25, 0.02 + 0.25 * affinity)
-        common_students[(lecture_id_1, lecture_id_2)] = max(
-            1,
-            min(max_shared, int(math.ceil(target_fraction * max_shared))),
-        )
-    return common_students
+            current_lecture = rng.choices(first_candidates, weights=first_weights, k=1)[0]
+            accumulated_slots = 0
+            classes_taken = 0
+
+            while True:
+                attendance[current_lecture.lecture_id] += 1
+                accumulated_slots += current_lecture.duration
+                classes_taken += 1
+
+                next_candidates = []
+                next_weights = []
+                for next_lecture in successor_map.get(current_lecture.lecture_id, []):
+                    weight = next_lecture_weight(
+                        student_subject,
+                        student_year,
+                        next_lecture,
+                        attendance,
+                        targets,
+                        halls,
+                    )
+                    if weight <= 0:
+                        continue
+                    next_candidates.append(next_lecture)
+                    next_weights.append(weight)
+
+                if not next_candidates:
+                    break
+
+                stop_probability = journey_stop_probability(
+                    accumulated_slots,
+                    classes_taken,
+                    common_prob,
+                    slots_per_day,
+                    max(
+                        student_course_affinity(student_subject, student_year, next_lecture)
+                        for next_lecture in next_candidates
+                    ),
+                )
+                if rng.random() < stop_probability:
+                    break
+
+                next_lecture = rng.choices(next_candidates, weights=next_weights, k=1)[0]
+                common_students[(current_lecture.lecture_id, next_lecture.lecture_id)] = (
+                    common_students.get((current_lecture.lecture_id, next_lecture.lecture_id), 0) + 1
+                )
+                current_lecture = next_lecture
+
+    simulate_batch(total_students)
+
+    for _ in range(4):
+        deficit = sum(max(0, targets[lecture.lecture_id] - attendance[lecture.lecture_id]) for lecture in lectures)
+        if deficit <= 0.08 * total_target:
+            break
+        extra_students = int(math.ceil(deficit / max(1.0, expected_classes_per_student - 0.3)))
+        simulate_batch(extra_students)
+
+    updated_lectures = [
+        replace(lecture, students=attendance[lecture.lecture_id])
+        for lecture in lectures
+    ]
+
+    if not common_students:
+        fallback_subject, fallback_year = generate_student_profiles(1, rng)[0]
+        weighted_pairs = [
+            (
+                prev_lecture.lecture_id,
+                next_lecture.lecture_id,
+                (
+                    student_course_affinity(fallback_subject, fallback_year, next_lecture)
+                    * max(1, attendance[prev_lecture.lecture_id] + attendance[next_lecture.lecture_id])
+                ),
+            )
+            for prev_lecture in lectures
+            for next_lecture in successor_map.get(prev_lecture.lecture_id, [])
+        ]
+        weighted_pairs = [pair for pair in weighted_pairs if pair[2] > 0]
+        if weighted_pairs:
+            lecture_id_1, lecture_id_2, _ = rng.choices(
+                weighted_pairs,
+                weights=[pair[2] for pair in weighted_pairs],
+                k=1,
+            )[0]
+            common_students[(lecture_id_1, lecture_id_2)] = 1
+
+    return updated_lectures, common_students
 
 
 def build_instance(
@@ -537,11 +677,17 @@ def build_instance(
     halls = generate_halls(num_halls, rng)
     distances = generate_distances(halls)
     lectures = generate_lectures(halls, slots_per_day, density, rng)
+    lectures, common_students = simulate_student_journeys(
+        lectures=lectures,
+        halls=halls,
+        slots_per_day=slots_per_day,
+        common_prob=common_prob,
+        rng=rng,
+    )
     compatibility = {
         lecture.lecture_id: [hall.hall_id for hall in halls if hall.capacity >= lecture.students]
         for lecture in lectures
     }
-    common_students = generate_common_students(lectures, common_prob, rng)
     horizon = DAYS_PER_WEEK * slots_per_day
     active_lectures_by_slot = {
         slot: [
@@ -663,6 +809,7 @@ def assignment_details_from_map(
                 "lecture_name": lecture.name,
                 "subject": lecture.subject,
                 "study_year": lecture.study_year,
+                "course_type": "compulsory" if lecture.is_compulsory else "elective",
                 "day": lecture.day,
                 "start_slot": lecture.start_slot,
                 "end_slot": lecture.end_slot,
@@ -1360,6 +1507,7 @@ def instance_to_json_dict(instance: Instance) -> dict[str, Any]:
                 "lecture_name": lecture.name,
                 "subject": lecture.subject,
                 "study_year": lecture.study_year,
+                "course_type": "compulsory" if lecture.is_compulsory else "elective",
                 "day": lecture.day,
                 "start_slot_in_day": lecture.start_slot_in_day,
                 "duration": lecture.duration,
