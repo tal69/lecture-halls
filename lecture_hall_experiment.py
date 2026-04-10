@@ -104,9 +104,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--seed",
         dest="seed",
-        type=int,
-        default=0,
-        help="Random seed. Default: 0.",
+        type=str,
+        default="0",
+        help="Random seed. Can be a single int, a range (e.g. 1-100), or start-step-end (e.g. 1-3-9). Default: 0.",
     )
     parser.add_argument(
         "--density",
@@ -169,12 +169,26 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--time-limit must be positive.")
 
 
-def ensure_output_path(path: Path | None, seed: int, num_halls: int) -> Path:
+def ensure_output_path(path: Path | None, seed: Any, num_halls: int) -> Path:
     if path is None:
         return Path("results.xlsx")
     if path.suffix.lower() != ".xlsx":
         return path.with_suffix(".xlsx")
     return path
+
+
+def parse_seed_range(seed_str: str) -> list[int]:
+    parts = str(seed_str).split("-")
+    try:
+        if len(parts) == 1:
+            return [int(parts[0])]
+        elif len(parts) == 2:
+            return list(range(int(parts[0]), int(parts[1]) + 1))
+        elif len(parts) == 3:
+            return list(range(int(parts[0]), int(parts[2]) + 1, int(parts[1])))
+    except ValueError:
+        pass
+    raise ValueError(f"Invalid seed format: {seed_str}")
 
 
 def build_json_path(output_path: Path, run_tag: str) -> Path:
@@ -1211,46 +1225,59 @@ def print_console_summary(output_path: Path, summary_rows: list[dict[str, Any]])
 
 def main() -> None:
     args = parse_args()
+    try:
+        seeds = parse_seed_range(args.seed)
+    except ValueError as e:
+        raise SystemExit(str(e))
+        
     output_path = ensure_output_path(args.output, args.seed, args.num_halls)
 
     started_at = dt.datetime.now().astimezone()
-    run_tag = started_at.strftime("%Y%m%d_%H%M%S")
-    instance = build_instance(
-        num_halls=args.num_halls,
-        slots_per_day=args.slots_per_day,
-        seed=args.seed,
-        density=args.density,
-        common_prob=args.common_prob,
-    )
+    base_run_tag = started_at.strftime("%Y%m%d_%H%M%S")
+    
+    all_summary_rows = []
 
-    results = [
-        solve_gurobi_quadratic(instance, args.time_limit, verbose=not args.quiet),
-        solve_gurobi_linearized(instance, args.time_limit, verbose=not args.quiet),
-        solve_cp_sat(instance, args.time_limit, verbose=not args.quiet),
-    ]
+    for seed in seeds:
+        run_tag = f"{base_run_tag}_seed{seed}"
+        instance = build_instance(
+            num_halls=args.num_halls,
+            slots_per_day=args.slots_per_day,
+            seed=seed,
+            density=args.density,
+            common_prob=args.common_prob,
+        )
 
-    finished_at = dt.datetime.now().astimezone()
-    summary_rows = build_summary_rows(
-        instance=instance,
-        results=results,
-        started_at=started_at,
-        finished_at=finished_at,
-        time_limit=args.time_limit,
-    )
-    write_excel(output_path, instance, results, summary_rows, run_tag)
-    if args.save_json:
-        json_path = build_json_path(output_path, run_tag)
-        payload = build_json_payload(
+        results = [
+            solve_gurobi_quadratic(instance, args.time_limit, verbose=not args.quiet),
+            solve_gurobi_linearized(instance, args.time_limit, verbose=not args.quiet),
+            solve_cp_sat(instance, args.time_limit, verbose=not args.quiet),
+        ]
+
+        finished_at = dt.datetime.now().astimezone()
+        summary_rows = build_summary_rows(
             instance=instance,
             results=results,
-            summary_rows=summary_rows,
             started_at=started_at,
             finished_at=finished_at,
             time_limit=args.time_limit,
         )
-        write_json(json_path, payload)
-        print(f"JSON written to: {json_path}")
-    print_console_summary(output_path, summary_rows)
+        all_summary_rows.extend(summary_rows)
+        write_excel(output_path, instance, results, summary_rows, run_tag)
+        
+        if args.save_json:
+            json_path = build_json_path(output_path, run_tag)
+            payload = build_json_payload(
+                instance=instance,
+                results=results,
+                summary_rows=summary_rows,
+                started_at=started_at,
+                finished_at=finished_at,
+                time_limit=args.time_limit,
+            )
+            write_json(json_path, payload)
+            print(f"JSON written to: {json_path}")
+            
+    print_console_summary(output_path, all_summary_rows)
 
 
 if __name__ == "__main__":
