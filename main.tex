@@ -74,11 +74,11 @@ Let $s_l$ denote the number of students attending lecture $l$, and let $u_h$ den
 \end{align}
 The objective is quadratic because the cost of assigning a lecture to a hall depends on where the immediately succeeding lecture is assigned. The first set of constraints ensures that each lecture is assigned to exactly one compatible hall, and the second is a stronger non-overlap condition: for every hall and every time unit, at most one lecture occupying that time unit may be assigned to that hall.
 
-An immediate structural observation is that the problem is separable by day. Let $D$ denote the set of teaching days, and for each $d \in D$ let $L_d \subseteq L$ be the set of lectures scheduled on day $d$. Likewise, let $A_d \subseteq A$ be the set of successor pairs whose two lectures both belong to day $d$, and let $T_d \subseteq T$ be the set of time units associated with day $d$. Because temporal-overlap constraints involve only lectures that occur on the same day, and because an immediate-successor pair must also lie within a single day, both the objective and the feasibility constraints decompose across days. Therefore, the weekly problem can be written as the sum of independent daily subproblems,
+An immediate structural observation is that the problem is separable by day. Let $D$ denote the set of teaching days, and for each $d \in D$ let $L_d \subseteq L$ be the set of lectures scheduled on day $d$. Likewise, let $A_d \subseteq A$ be the set of successor pairs whose two lectures both belong to day $d$, and let $T_d \subseteq T$ be the set of time units associated with day $d$. Because temporal-overlap constraints involve only lectures that occur on the same day, and because an immediate-successor pair must also lie within a single day, both the objective and feasibility constraints decompose across days. Therefore, the weekly problem can be written as the sum of independent daily subproblems,
 \begin{equation}
     \min \sum_{d \in D} f_d(x^d),
 \end{equation}
-where each $f_d$ is the objective induced by the lectures and successor pairs of day $d$, and $x^d$ denotes the hall-assignment decisions for that day. In particular, solving the overall weekly problem is equivalent to solving one independent lecture-hall assignment problem for each day and combining the resulting assignments. This observation is useful both computationally and conceptually, and in what follows one may interpret the model as applying either to the full week or, equivalently, to a single-day instance.
+where each $f_d$ is the objective induced by the lectures and successor pairs of day $d$, and $x^d$ denotes the hall-assignment decisions for that day. In particular, solving the overall weekly problem is equivalent to solving one independent lecture-hall assignment problem for each day and combining the resulting assignments. This observation is useful both computationally and conceptually. Therefore, in what follows one may interpret the model as applying either to the full week or, equivalently, to a single-day instance.
 
 The interval structure also yields a tighter way to express temporal feasibility. Fix a day $d \in D$, and define the interval graph $G_d=(L_d,E_d)$ in which two lectures are adjacent if and only if their scheduled intervals overlap. Since the lecture intervals lie on a line, $G_d$ is an interval graph. Let $\mathcal{C}_d$ denote the family of maximal cliques of $G_d$. Then the slot-indexed constraints \eqref{eq:nlp-overlap} may be replaced by the clique constraints
 \begin{equation}
@@ -103,7 +103,36 @@ y_{l_1 l_2} \ge c_{l_1,l_2} \, d_{h_1,h_2}.
 \]
 For every other hall pair, the right-hand side of \eqref{eq:milp-link3} is nonpositive. Therefore, because the objective minimizes $\sum y_{l_1 l_2}$ and $y_{l_1 l_2}$ is constrained to be nonnegative, the optimal value of $y_{l_1 l_2}$ is exactly the realized walking cost associated with the halls assigned to $l_1$ and $l_2$. Restricting the $y$ variables to pairs with $c_{l_1,l_2} > 0$ is sufficient, since pairs with zero shared enrollment do not contribute to the objective.
 
-Compared with the more disaggregated linearization that introduces one variable for each tuple $(l_1,l_2,h_1,h_2)$, formulation \eqref{eq:milp-obj}--\eqref{eq:milp-y-nonneg} is substantially more compact in the number of additional variables. However, this compactness does not necessarily imply a stronger linear-programming relaxation.
+Compared with the standard disaggregated linearization that introduces one variable for each tuple $(l_1,l_2,h_1,h_2)$, formulation \eqref{eq:milp-obj}--\eqref{eq:milp-y-nonneg} is substantially more compact in the number of additional variables. However, this compactness does not necessarily imply a stronger linear-programming relaxation.
+
+One way to tighten Constraint \eqref{eq:milp-link3} is to exploit the fact that each lecture is assigned to exactly one hall and add
+\begin{equation}
+y_{l_1 l_2} \ge c_{l_1,l_2} \, d_{h_1,h_2}\bigl(x_{l_1 h_1} -1 +  \sum_{h: d_{h_1,h} \ge d_{h_1,h_2}}  x_{l_2 h} \bigr), \qquad \forall (l_1,l_2) \in A',  h_1 \in H(l_1), h_2 \in H(l_2). \label{eq:milp-link-strong}
+\end{equation}  
+This is a valid inequality. Fix $(l_1,l_2)$, $h_1$, and $h_2$, and consider any integer-feasible solution. If $x_{l_1 h_1}=0$, then the term in parentheses is at most zero, because $\sum_h x_{l_2 h}=1$ and therefore $\sum_{h: d_{h_1,h} \ge d_{h_1,h_2}} x_{l_2 h} \le 1$. In that case \eqref{eq:milp-link-strong} is implied by the nonnegativity of $y_{l_1 l_2}$. Now suppose that $x_{l_1 h_1}=1$, and let $g$ be the unique hall assigned to $l_2$. Then the summation term is equal to $1$ if $d_{h_1,g} \ge d_{h_1,h_2}$ and $0$ otherwise. Hence the right-hand side of \eqref{eq:milp-link-strong} is either $0$ or $c_{l_1,l_2} d_{h_1,h_2}$. In the latter case, the realized walking cost is $c_{l_1,l_2} d_{h_1,g}$, and since $d_{h_1,g} \ge d_{h_1,h_2}$ by construction, we obtain
+\[
+c_{l_1,l_2} d_{h_1,g} \ge c_{l_1,l_2} d_{h_1,h_2}.
+\]
+Therefore \eqref{eq:milp-link-strong} cannot cut off any integer-feasible assignment, although it may cut fractional solutions and thereby strengthen the linear relaxation.
+
+The strengthening can in fact be strict on a large family of fractional points. Fix $(l_1,l_2) \in A'$ with $c_{l_1,l_2}>0$, and let $A=\{a_1,\ldots,a_p\} \subseteq H(l_1)$ and $B=\{b_1,\ldots,b_q\} \subseteq H(l_2)$ with $p,q \ge 2$. Assume that $d_{a_i,b_j}=D>0$ for every $a_i \in A$ and $b_j \in B$. Consider the fractional point defined by
+\[
+x_{l_1,a_i}=\frac{1}{p} \quad \forall a_i \in A, \qquad
+x_{l_2,b_j}=\frac{1}{q} \quad \forall b_j \in B,
+\]
+all other assignment variables for $l_1$ and $l_2$ equal to zero, and $y_{l_1 l_2}=0$. Then, for every $a_i \in A$ and $b_j \in B$,
+\[
+x_{l_1,a_i}+x_{l_2,b_j}-1=\frac{1}{p}+\frac{1}{q}-1 \le 0,
+\]
+so all inequalities \eqref{eq:milp-link3} are satisfied. However, for any fixed $a_i \in A$ and $b_j \in B$, one has
+\[
+\sum_{h: d_{a_i,h} \ge d_{a_i,b_j}} x_{l_2 h} \ge \sum_{h \in B} x_{l_2 h}=1,
+\]
+and therefore \eqref{eq:milp-link-strong} implies
+\[
+y_{l_1 l_2} \ge c_{l_1,l_2} D\left(\frac{1}{p}-1+1\right)=\frac{c_{l_1,l_2}D}{p}>0,
+\]
+which contradicts $y_{l_1 l_2}=0$. Hence \eqref{eq:milp-link-strong} cuts off an infinite family of fractional solutions that remain feasible under \eqref{eq:milp-link3}.
 
 A constraint-programming (CP) formulation can be made more compact by replacing the binary assignment variables with one integer decision variable $a_l$ for each lecture $l \in L$, where $a_l$ denotes the hall assigned to lecture $l$ and its domain is restricted to the compatible set $H(l)$. The model can then be written as
 \begin{align}

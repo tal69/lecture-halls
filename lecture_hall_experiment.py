@@ -145,7 +145,10 @@ def parse_args() -> argparse.Namespace:
         type=int,
         choices=(0, 1),
         default=1,
-        help="Turn the extra strengthening cuts for the linearized MILP on (1) or off (0). Default: 1.",
+        help=(
+            "Linearized MILP cut mode: 0 = base link constraints only, "
+            "1 = strong cut only. Default: 1."
+        ),
     )
     parser.add_argument(
         "--model",
@@ -961,11 +964,11 @@ def assignment_details_from_map(
 
 def build_gurobi_linearized_model(
     instance: Instance,
-    cuts: bool,
+    cuts: int,
     time_limit: float | None,
     verbose: bool,
     threads: int | None = None,
-) -> tuple[Model, dict[tuple[int, int], Any], dict[tuple[int, int, int, int], Any], int]:
+) -> tuple[Model, dict[tuple[int, int], Any], dict[tuple[int, int], Any], int]:
     thread_limit = gurobi_thread_limit() if threads is None else threads
     model = Model("lecture_hall_linearized")
     model.Params.OutputFlag = 1 if verbose else 0
@@ -974,7 +977,7 @@ def build_gurobi_linearized_model(
     model.Params.Threads = thread_limit
 
     x: dict[tuple[int, int], Any] = {}
-    y: dict[tuple[int, int, int, int], Any] = {}
+    y: dict[tuple[int, int], Any] = {}
 
     for lecture in instance.lectures:
         for hall_id in instance.compatibility[lecture.lecture_id]:
@@ -983,13 +986,12 @@ def build_gurobi_linearized_model(
                 name=f"x_{lecture.lecture_id}_{hall_id}",
             )
 
-    for (lecture_id_1, lecture_id_2) in instance.common_students:
-        for hall_id_1 in instance.compatibility[lecture_id_1]:
-            for hall_id_2 in instance.compatibility[lecture_id_2]:
-                y[(lecture_id_1, lecture_id_2, hall_id_1, hall_id_2)] = model.addVar(
-                    vtype=GRB.BINARY,
-                    name=f"y_{lecture_id_1}_{lecture_id_2}_{hall_id_1}_{hall_id_2}",
-                )
+    for lecture_id_1, lecture_id_2 in instance.common_students:
+        y[(lecture_id_1, lecture_id_2)] = model.addVar(
+            lb=0.0,
+            vtype=GRB.CONTINUOUS,
+            name=f"y_{lecture_id_1}_{lecture_id_2}",
+        )
 
     model.update()
 
@@ -1018,70 +1020,47 @@ def build_gurobi_linearized_model(
                     name=f"overlap_h{hall.hall_id}_t{slot}",
                 )
 
-    for (lecture_id_1, lecture_id_2), _ in instance.common_students.items():
-        for hall_id_1 in instance.compatibility[lecture_id_1]:
-            for hall_id_2 in instance.compatibility[lecture_id_2]:
-                model.addConstr(
-                    y[(lecture_id_1, lecture_id_2, hall_id_1, hall_id_2)]
-                    >= x[(lecture_id_1, hall_id_1)] + x[(lecture_id_2, hall_id_2)] - 1,
-                    name=f"link_{lecture_id_1}_{lecture_id_2}_{hall_id_1}_{hall_id_2}",
-                )
+    if cuts == 0:
+        for (lecture_id_1, lecture_id_2), common_count in instance.common_students.items():
+            for hall_id_1 in instance.compatibility[lecture_id_1]:
+                for hall_id_2 in instance.compatibility[lecture_id_2]:
+                    model.addConstr(
+                        y[(lecture_id_1, lecture_id_2)]
+                        >= common_count
+                        * instance.distances[hall_id_1][hall_id_2]
+                        * (x[(lecture_id_1, hall_id_1)] + x[(lecture_id_2, hall_id_2)] - 1),
+                        name=f"link_{lecture_id_1}_{lecture_id_2}_{hall_id_1}_{hall_id_2}",
+                    )
 
-    if cuts:
-        # Strengthen the LP relaxation by conditioning the realized distance
-        # on one fixed hall choice at a time.
-        for (lecture_id_1, lecture_id_2), _ in instance.common_students.items():
+    if cuts == 1:
+        for (lecture_id_1, lecture_id_2), common_count in instance.common_students.items():
             halls_1 = instance.compatibility[lecture_id_1]
             halls_2 = instance.compatibility[lecture_id_2]
 
             for hall_id_1 in halls_1:
-                max_distance = max(
-                    instance.distances[hall_id_1][hall_id_2] for hall_id_2 in halls_2
-                )
-                model.addConstr(
-                    quicksum(
-                        instance.distances[hall_id_1][hall_id_2]
-                        * y[(lecture_id_1, lecture_id_2, hall_id_1, hall_id_2)]
-                        for hall_id_2 in halls_2
+                for hall_id_2 in halls_2:
+                    threshold_distance = instance.distances[hall_id_1][hall_id_2]
+                    farther_halls = [
+                        hall_id
+                        for hall_id in halls_2
+                        if instance.distances[hall_id_1][hall_id] >= threshold_distance
+                    ]
+                    model.addConstr(
+                        y[(lecture_id_1, lecture_id_2)]
+                        >= common_count
+                        * threshold_distance
+                        * (
+                            x[(lecture_id_1, hall_id_1)]
+                            - 1
+                            + quicksum(x[(lecture_id_2, hall_id)] for hall_id in farther_halls)
+                        ),
+                        name=f"strong_{lecture_id_1}_{lecture_id_2}_{hall_id_1}_{hall_id_2}",
                     )
-                    >= quicksum(
-                        instance.distances[hall_id_1][hall_id_2]
-                        * x[(lecture_id_2, hall_id_2)]
-                        for hall_id_2 in halls_2
-                    )
-                    - max_distance * (1 - x[(lecture_id_1, hall_id_1)]),
-                    name=f"cut_from_{lecture_id_1}_{lecture_id_2}_{hall_id_1}",
-                )
 
-            for hall_id_2 in halls_2:
-                max_distance = max(
-                    instance.distances[hall_id_1][hall_id_2] for hall_id_1 in halls_1
-                )
-                model.addConstr(
-                    quicksum(
-                        instance.distances[hall_id_1][hall_id_2]
-                        * y[(lecture_id_1, lecture_id_2, hall_id_1, hall_id_2)]
-                        for hall_id_1 in halls_1
-                    )
-                    >= quicksum(
-                        instance.distances[hall_id_1][hall_id_2]
-                        * x[(lecture_id_1, hall_id_1)]
-                        for hall_id_1 in halls_1
-                    )
-                    - max_distance * (1 - x[(lecture_id_2, hall_id_2)]),
-                    name=f"cut_to_{lecture_id_1}_{lecture_id_2}_{hall_id_2}",
-                )
-
-    objective_terms = []
-    for (lecture_id_1, lecture_id_2), common_count in instance.common_students.items():
-        for hall_id_1 in instance.compatibility[lecture_id_1]:
-            for hall_id_2 in instance.compatibility[lecture_id_2]:
-                distance = instance.distances[hall_id_1][hall_id_2]
-                objective_terms.append(
-                    common_count
-                    * distance
-                    * y[(lecture_id_1, lecture_id_2, hall_id_1, hall_id_2)]
-                )
+    objective_terms = [
+        y[(lecture_id_1, lecture_id_2)]
+        for (lecture_id_1, lecture_id_2) in instance.common_students
+    ]
     model.setObjective(quicksum(objective_terms), GRB.MINIMIZE)
     return model, x, y, thread_limit
 
@@ -1191,7 +1170,7 @@ def solve_gurobi_quadratic(instance: Instance, time_limit: float, verbose: bool 
 def solve_gurobi_linearized(
     instance: Instance,
     time_limit: float,
-    cuts: bool = True,
+    cuts: int = 1,
     verbose: bool = True,
 ) -> dict[str, Any]:
     wall_start = time.perf_counter()
@@ -1228,7 +1207,7 @@ def solve_gurobi_linearized(
             "solver_runtime_seconds": safe_float(model.Runtime),
             "mip_gap": safe_float(model.MIPGap) if model.SolCount > 0 else None,
             "threads": thread_limit,
-            "cuts_enabled": cuts,
+            "cuts_mode": cuts,
             "error": None,
             "solution": assignment_details_from_map(instance, assignment_by_lecture),
         }
@@ -1243,7 +1222,7 @@ def solve_gurobi_linearized(
             "solver_runtime_seconds": None,
             "mip_gap": None,
             "threads": thread_limit,
-            "cuts_enabled": cuts,
+            "cuts_mode": cuts,
             "error": str(error),
             "solution": None,
         }
@@ -1252,7 +1231,7 @@ def solve_gurobi_linearized(
 def solve_gurobi_linearized_root(
     instance: Instance,
     time_limit: float,
-    cuts: bool = True,
+    cuts: int = 1,
     verbose: bool = True,
 ) -> dict[str, Any]:
     wall_start = time.perf_counter()
@@ -1301,7 +1280,7 @@ def solve_gurobi_linearized_root(
             "solver_runtime_seconds": safe_float(model.Runtime),
             "mip_gap": None,
             "threads": thread_limit,
-            "cuts_enabled": cuts,
+            "cuts_mode": cuts,
             "error": None,
             "solution": None,
         }
@@ -1316,7 +1295,7 @@ def solve_gurobi_linearized_root(
             "solver_runtime_seconds": None,
             "mip_gap": None,
             "threads": gurobi_thread_limit(),
-            "cuts_enabled": cuts,
+            "cuts_mode": cuts,
             "error": str(error),
             "solution": None,
         }
@@ -1414,7 +1393,7 @@ def build_summary_rows(
     started_at: dt.datetime,
     finished_at: dt.datetime,
     time_limit: float,
-    cuts_enabled: bool,
+    cuts_mode: int,
 ) -> list[dict[str, Any]]:
     total_lecture_length = sum(lecture.duration for lecture in instance.lectures)
     sizes = [lecture.students for lecture in instance.lectures]
@@ -1478,7 +1457,7 @@ def build_summary_rows(
                 "density_target": instance.density_target,
                 "density_actual": instance.density_actual,
                 "time_limit_seconds": time_limit,
-                "linearized_cuts": cuts_enabled,
+                "linearized_cuts": cuts_mode,
                 "num_lectures": len(instance.lectures),
                 "total_lecture_length": total_lecture_length,
                 "avg_lecture_length": total_lecture_length / len(instance.lectures),
@@ -1651,7 +1630,7 @@ def build_json_payload(
     started_at: dt.datetime,
     finished_at: dt.datetime,
     time_limit: float,
-    cuts_enabled: bool,
+    cuts_mode: int,
 ) -> dict[str, Any]:
     return {
         "experiment": {
@@ -1661,7 +1640,7 @@ def build_json_payload(
             "platform": platform.platform(),
             "python_version": sys.version,
             "time_limit_seconds": time_limit,
-            "linearized_cuts": cuts_enabled,
+            "linearized_cuts": cuts_mode,
         },
         "instance": instance_to_json_dict(instance),
         "results_summary": summary_rows,
@@ -1741,7 +1720,7 @@ def main() -> None:
                 solve_gurobi_linearized(
                     instance,
                     args.time_limit,
-                    cuts=bool(args.cuts),
+                    cuts=args.cuts,
                     verbose=not args.quiet,
                 ),
                 solve_cp_sat(instance, args.time_limit, verbose=not args.quiet),
@@ -1755,7 +1734,7 @@ def main() -> None:
                 solve_gurobi_linearized(
                     instance,
                     args.time_limit,
-                    cuts=bool(args.cuts),
+                    cuts=args.cuts,
                     verbose=not args.quiet,
                 ),
             ]
@@ -1768,7 +1747,7 @@ def main() -> None:
                 solve_gurobi_linearized_root(
                     instance,
                     args.time_limit,
-                    cuts=bool(args.cuts),
+                    cuts=args.cuts,
                     verbose=not args.quiet,
                 ),
             ]
@@ -1780,7 +1759,7 @@ def main() -> None:
             started_at=started_at,
             finished_at=finished_at,
             time_limit=args.time_limit,
-            cuts_enabled=bool(args.cuts),
+            cuts_mode=args.cuts,
         )
         all_summary_rows.extend(summary_rows)
         write_excel(output_path, summary_rows)
@@ -1794,7 +1773,7 @@ def main() -> None:
                 started_at=started_at,
                 finished_at=finished_at,
                 time_limit=args.time_limit,
-                cuts_enabled=bool(args.cuts),
+                cuts_mode=args.cuts,
             )
             write_json(json_path, payload)
             print(f"JSON written to: {json_path}")

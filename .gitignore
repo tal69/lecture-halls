@@ -9,3 +9,13 @@ __pycache__/
 # Results files
 *.xlsx
 *.json
+
+# LaTeX build artifacts
+*.aux
+*.log
+*.bbl
+*.blg
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+*.out
