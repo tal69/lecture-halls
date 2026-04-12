@@ -1080,9 +1080,12 @@ def build_gurobi_linearized_model(
     if time_limit is not None:
         model.Params.TimeLimit = time_limit
     model.Params.Threads = thread_limit
+    model.Params.NumericFocus = 2
+    model.Params.ScaleFlag = 2
+    model.Params.ObjScale = -0.5
 
     x: dict[tuple[int, int], Any] = {}
-    y: dict[tuple[int, int], Any] = {}
+    z: dict[tuple[int, int], Any] = {}
 
     for lecture in instance.lectures:
         for hall_id in instance.compatibility[lecture.lecture_id]:
@@ -1092,10 +1095,10 @@ def build_gurobi_linearized_model(
             )
 
     for lecture_id_1, lecture_id_2 in instance.common_students:
-        y[(lecture_id_1, lecture_id_2)] = model.addVar(
+        z[(lecture_id_1, lecture_id_2)] = model.addVar(
             lb=0.0,
             vtype=GRB.CONTINUOUS,
-            name=f"y_{lecture_id_1}_{lecture_id_2}",
+            name=f"z_{lecture_id_1}_{lecture_id_2}",
         )
 
     model.update()
@@ -1126,19 +1129,18 @@ def build_gurobi_linearized_model(
                 )
 
     if cuts == 0:
-        for (lecture_id_1, lecture_id_2), common_count in instance.common_students.items():
+        for lecture_id_1, lecture_id_2 in instance.common_students:
             for hall_id_1 in instance.compatibility[lecture_id_1]:
                 for hall_id_2 in instance.compatibility[lecture_id_2]:
                     model.addConstr(
-                        y[(lecture_id_1, lecture_id_2)]
-                        >= common_count
-                        * instance.distances[hall_id_1][hall_id_2]
+                        z[(lecture_id_1, lecture_id_2)]
+                        >= instance.distances[hall_id_1][hall_id_2]
                         * (x[(lecture_id_1, hall_id_1)] + x[(lecture_id_2, hall_id_2)] - 1),
                         name=f"link_{lecture_id_1}_{lecture_id_2}_{hall_id_1}_{hall_id_2}",
                     )
 
     if cuts == 1:
-        for (lecture_id_1, lecture_id_2), common_count in instance.common_students.items():
+        for lecture_id_1, lecture_id_2 in instance.common_students:
             halls_1 = instance.compatibility[lecture_id_1]
             halls_2 = instance.compatibility[lecture_id_2]
 
@@ -1151,9 +1153,8 @@ def build_gurobi_linearized_model(
                         if instance.distances[hall_id_1][hall_id] >= threshold_distance
                     ]
                     model.addConstr(
-                        y[(lecture_id_1, lecture_id_2)]
-                        >= common_count
-                        * threshold_distance
+                        z[(lecture_id_1, lecture_id_2)]
+                        >= threshold_distance
                         * (
                             x[(lecture_id_1, hall_id_1)]
                             - 1
@@ -1162,12 +1163,13 @@ def build_gurobi_linearized_model(
                         name=f"strong_{lecture_id_1}_{lecture_id_2}_{hall_id_1}_{hall_id_2}",
                     )
 
+    # Keep the pair weights in the objective to improve matrix scaling.
     objective_terms = [
-        y[(lecture_id_1, lecture_id_2)]
-        for (lecture_id_1, lecture_id_2) in instance.common_students
+        common_count * z[(lecture_id_1, lecture_id_2)]
+        for (lecture_id_1, lecture_id_2), common_count in instance.common_students.items()
     ]
     model.setObjective(quicksum(objective_terms), GRB.MINIMIZE)
-    return model, x, y, thread_limit
+    return model, x, z, thread_limit
 
 
 def solve_gurobi_quadratic(instance: Instance, time_limit: float, verbose: bool = True) -> dict[str, Any]:

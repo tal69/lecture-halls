@@ -87,31 +87,31 @@ The interval structure also yields a tighter way to express temporal feasibility
 \end{equation}
 This replacement is exact. For every time unit $t$, the set $L(t)$ of lectures active at time $t$ forms a clique in the interval graph, and therefore is contained in a maximal clique. Conversely, by the Helly property of intervals, every clique of an interval graph has a common intersection point, so each maximal clique corresponds to a set of lectures that are simultaneously active at some time. Hence \eqref{eq:clique-overlap} is equivalent to the family of slot-indexed non-overlap constraints, but it is often smaller because many consecutive time units induce identical or nested active sets. The same observation applies to the MILP and CP formulations below: one may replace the time-indexed overlap constraints, or the corresponding \texttt{AllDifferent} constraints, by maximal-clique constraints of the interval graph.
 
-A compact linearization can be obtained by introducing, for each successor pair $(l_1,l_2) \in A$ such that $c_{l_1,l_2} > 0$, one nonnegative continuous variable $y_{l_1 l_2}$ representing the walking cost induced by that pair. The problem can then be reformulated as the mixed-integer linear program
+A compact linearization can be obtained by introducing, for each successor pair $(l_1,l_2) \in A$ such that $c_{l_1,l_2} > 0$, one nonnegative continuous variable $z_{l_1 l_2}$ representing the realized hall-to-hall distance induced by that pair. The problem can then be reformulated as the mixed-integer linear program
 \begin{align}
-    \min \quad & \sum_{(l_1,l_2) \in A'} y_{l_1 l_2} \label{eq:milp-obj} \\
+    \min \quad & \sum_{(l_1,l_2) \in A'} c_{l_1,l_2} z_{l_1 l_2} \label{eq:milp-obj} \\
     \text{s.t.} \quad
     & \sum_{h \in H(l)} x_{lh} = 1, && \forall l \in L, \label{eq:milp-assign} \\
     & \sum_{l \in L(t)} x_{lh} \le 1, && \forall t \in T,\ \forall h \in H, \label{eq:milp-overlap} \\
-    & y_{l_1 l_2} \ge c_{l_1,l_2} \, d_{h_1,h_2}\bigl(x_{l_1 h_1} + x_{l_2 h_2} - 1\bigr), && \forall (l_1,l_2) \in A',  h_1 \in H(l_1), h_2 \in H(l_2), \label{eq:milp-link3} \\
+    & z_{l_1 l_2} \ge d_{h_1,h_2}\bigl(x_{l_1 h_1} + x_{l_2 h_2} - 1\bigr), && \forall (l_1,l_2) \in A',  h_1 \in H(l_1), h_2 \in H(l_2), \label{eq:milp-link3} \\
     & x_{lh} \in \{0,1\}, && \forall l \in L,\ \forall h \in H(l), \label{eq:milp-x-binary} \\
-    & y_{l_1 l_2} \ge 0, && \forall (l_1,l_2) \in A'. \label{eq:milp-y-nonneg}
+    & z_{l_1 l_2} \ge 0, && \forall (l_1,l_2) \in A'. \label{eq:milp-z-nonneg}
 \end{align}
 This reformulation is exact. Since each lecture is assigned to exactly one hall, for every pair $(l_1,l_2)$ there is exactly one compatible hall pair $(h_1,h_2)$ for which $x_{l_1 h_1}=x_{l_2 h_2}=1$; for that pair, constraint~\eqref{eq:milp-link3} yields
 \[
-y_{l_1 l_2} \ge c_{l_1,l_2} \, d_{h_1,h_2}.
+z_{l_1 l_2} \ge d_{h_1,h_2}.
 \]
-For every other hall pair, the right-hand side of \eqref{eq:milp-link3} is nonpositive. Therefore, because the objective minimizes $\sum y_{l_1 l_2}$ and $y_{l_1 l_2}$ is constrained to be nonnegative, the optimal value of $y_{l_1 l_2}$ is exactly the realized walking cost associated with the halls assigned to $l_1$ and $l_2$. Restricting the $y$ variables to pairs with $c_{l_1,l_2} > 0$ is sufficient, since pairs with zero shared enrollment do not contribute to the objective.
+For every other hall pair, the right-hand side of \eqref{eq:milp-link3} is nonpositive. Therefore, because the objective minimizes $\sum c_{l_1,l_2} z_{l_1 l_2}$ and $z_{l_1 l_2}$ is constrained to be nonnegative, the optimal value of $z_{l_1 l_2}$ is exactly the realized distance associated with the halls assigned to $l_1$ and $l_2$. Multiplying by $c_{l_1,l_2}$ in the objective recovers the original walking-cost contribution. Restricting the $z$ variables to pairs with $c_{l_1,l_2} > 0$ is sufficient, since pairs with zero shared enrollment do not contribute to the objective.
 
-Compared with the standard disaggregated linearization that introduces one variable for each tuple $(l_1,l_2,h_1,h_2)$, formulation \eqref{eq:milp-obj}--\eqref{eq:milp-y-nonneg} is substantially more compact in the number of additional variables. However, this compactness does not necessarily imply a stronger linear-programming relaxation.
+Compared with the standard disaggregated linearization that introduces one variable for each tuple $(l_1,l_2,h_1,h_2)$, formulation \eqref{eq:milp-obj}--\eqref{eq:milp-z-nonneg} is substantially more compact in the number of additional variables. In addition, placing the shared-enrollment weight $c_{l_1,l_2}$ in the objective rather than in the linking constraints yields a better-scaled coefficient matrix while preserving the exact same optimal assignment. However, this compactness does not necessarily imply a stronger linear-programming relaxation.
 
 One way to tighten Constraint \eqref{eq:milp-link3} is to exploit the fact that each lecture is assigned to exactly one hall and add
 \begin{equation}
-y_{l_1 l_2} \ge c_{l_1,l_2} \, d_{h_1,h_2}\bigl(x_{l_1 h_1} -1 +  \sum_{h: d_{h_1,h} \ge d_{h_1,h_2}}  x_{l_2 h} \bigr), \qquad \forall (l_1,l_2) \in A',  h_1 \in H(l_1), h_2 \in H(l_2). \label{eq:milp-link-strong}
+z_{l_1 l_2} \ge d_{h_1,h_2}\bigl(x_{l_1 h_1} -1 +  \sum_{h: d_{h_1,h} \ge d_{h_1,h_2}}  x_{l_2 h} \bigr), \qquad \forall (l_1,l_2) \in A',  h_1 \in H(l_1), h_2 \in H(l_2). \label{eq:milp-link-strong}
 \end{equation}  
-This is a valid inequality. Fix $(l_1,l_2)$, $h_1$, and $h_2$, and consider any integer-feasible solution. If $x_{l_1 h_1}=0$, then the term in parentheses is at most zero, because $\sum_h x_{l_2 h}=1$ and therefore $\sum_{h: d_{h_1,h} \ge d_{h_1,h_2}} x_{l_2 h} \le 1$. In that case \eqref{eq:milp-link-strong} is implied by the nonnegativity of $y_{l_1 l_2}$. Now suppose that $x_{l_1 h_1}=1$, and let $g$ be the unique hall assigned to $l_2$. Then the summation term is equal to $1$ if $d_{h_1,g} \ge d_{h_1,h_2}$ and $0$ otherwise. Hence the right-hand side of \eqref{eq:milp-link-strong} is either $0$ or $c_{l_1,l_2} d_{h_1,h_2}$. In the latter case, the realized walking cost is $c_{l_1,l_2} d_{h_1,g}$, and since $d_{h_1,g} \ge d_{h_1,h_2}$ by construction, we obtain
+This is a valid inequality. Fix $(l_1,l_2)$, $h_1$, and $h_2$, and consider any integer-feasible solution. If $x_{l_1 h_1}=0$, then the term in parentheses is at most zero, because $\sum_h x_{l_2 h}=1$ and therefore $\sum_{h: d_{h_1,h} \ge d_{h_1,h_2}} x_{l_2 h} \le 1$. In that case \eqref{eq:milp-link-strong} is implied by the nonnegativity of $z_{l_1 l_2}$. Now suppose that $x_{l_1 h_1}=1$, and let $g$ be the unique hall assigned to $l_2$. Then the summation term is equal to $1$ if $d_{h_1,g} \ge d_{h_1,h_2}$ and $0$ otherwise. Hence the right-hand side of \eqref{eq:milp-link-strong} is either $0$ or $d_{h_1,h_2}$. In the latter case, the realized distance is $d_{h_1,g}$, and since $d_{h_1,g} \ge d_{h_1,h_2}$ by construction, we obtain
 \[
-c_{l_1,l_2} d_{h_1,g} \ge c_{l_1,l_2} d_{h_1,h_2}.
+d_{h_1,g} \ge d_{h_1,h_2}.
 \]
 Therefore \eqref{eq:milp-link-strong} cannot cut off any integer-feasible assignment, although it may cut fractional solutions and thereby strengthen the linear relaxation.
 
@@ -120,7 +120,7 @@ The strengthening can in fact be strict on a large family of fractional points. 
 x_{l_1,a_i}=\frac{1}{p} \quad \forall a_i \in A, \qquad
 x_{l_2,b_j}=\frac{1}{q} \quad \forall b_j \in B,
 \]
-all other assignment variables for $l_1$ and $l_2$ equal to zero, and $y_{l_1 l_2}=0$. Then, for every $a_i \in A$ and $b_j \in B$,
+all other assignment variables for $l_1$ and $l_2$ equal to zero, and $z_{l_1 l_2}=0$. Then, for every $a_i \in A$ and $b_j \in B$,
 \[
 x_{l_1,a_i}+x_{l_2,b_j}-1=\frac{1}{p}+\frac{1}{q}-1 \le 0,
 \]
@@ -130,9 +130,9 @@ so all inequalities \eqref{eq:milp-link3} are satisfied. However, for any fixed 
 \]
 and therefore \eqref{eq:milp-link-strong} implies
 \[
-y_{l_1 l_2} \ge c_{l_1,l_2} D\left(\frac{1}{p}-1+1\right)=\frac{c_{l_1,l_2}D}{p}>0,
+z_{l_1 l_2} \ge D\left(\frac{1}{p}-1+1\right)=\frac{D}{p}>0,
 \]
-which contradicts $y_{l_1 l_2}=0$. Hence \eqref{eq:milp-link-strong} cuts off an infinite family of fractional solutions that remain feasible under \eqref{eq:milp-link3}.
+which contradicts $z_{l_1 l_2}=0$. Hence \eqref{eq:milp-link-strong} cuts off an infinite family of fractional solutions that remain feasible under \eqref{eq:milp-link3}.
 
 A constraint-programming (CP) formulation can be made more compact by replacing the binary assignment variables with one integer decision variable $a_l$ for each lecture $l \in L$, where $a_l$ denotes the hall assigned to lecture $l$ and its domain is restricted to the compatible set $H(l)$. The model can then be written as
 \begin{align}
@@ -149,14 +149,14 @@ Constraint~\eqref{eq:cpsat-alldiff} enforces temporal feasibility. For every tim
 
 This formulation is a compact high-level CP model. In an implementation based on a CP-SAT solver such as OR-Tools, the hall assignments would still be represented directly by integer variables, and mutual exclusivity could be enforced by \texttt{AddAllDifferent}. The objective term $d_{a_{l_1},a_{l_2}}$ may be viewed as concise mathematical shorthand for indexing the distance matrix by decision variables.
 
-If one wants a lower-level encoding that is closer to an actual CP-SAT implementation, one may introduce for each successor pair $(l_1,l_2) \in A$ an auxiliary integer variable $z_{l_1,l_2}$ representing the realized walking distance, together with constraints enforcing
+If one wants a lower-level encoding that is closer to an actual CP-SAT implementation, one may introduce for each successor pair $(l_1,l_2) \in A$ an auxiliary integer variable $u_{l_1,l_2}$ representing the realized walking distance, together with constraints enforcing
 \begin{equation}
-    z_{l_1,l_2} = d_{a_{l_1},a_{l_2}}.
+    u_{l_1,l_2} = d_{a_{l_1},a_{l_2}}.
     \label{eq:cp-z-def}
 \end{equation}
 Then the objective in \eqref{eq:cpsat-obj} can be replaced by
 \begin{equation}
-    \min \sum_{(l_1,l_2) \in A} c_{l_1,l_2} \, z_{l_1,l_2},
+    \min \sum_{(l_1,l_2) \in A} c_{l_1,l_2} \, u_{l_1,l_2},
     \label{eq:cp-z-obj}
 \end{equation}
 and the relation \eqref{eq:cp-z-def} can be encoded in CP-SAT by an element constraint or an allowed-assignment table.
