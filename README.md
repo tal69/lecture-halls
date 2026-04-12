@@ -11,6 +11,8 @@ The current workflow includes:
   - OR-Tools `CP`,
 - and a `ROOT` mode for reporting the root-node bound of the linearized GUROBI model.
 
+The script also supports an `--instance-only` path that skips solving, prints the generated optimization input in a readable terminal layout, and saves the same instance in JSON.
+
 ## Requirements
 
 Python `3.9+` with:
@@ -42,13 +44,14 @@ Lectures:
   - but not both.
 
 Students:
-- are generated with balanced `subject` and `study_year` profiles,
-- choose their first lecture using an earlier-slot preference,
-- continue through the day based on their own profile, not on the previous course,
-- prefer compulsory courses over electives,
-- strongly prefer same-topic and same-year lectures, with very weak probability of large year jumps.
+- are generated around active `(subject, study_year)` cohorts rather than as independent first-course draws,
+- receive cohort sizes that are anchored to the compulsory offerings of their own cohort,
+- attend almost all compulsory lectures of their own topic and year,
+- are frequently distributed among their own parallel elective lectures,
+- may occasionally take a previous-year lecture in their own topic,
+- and only very rarely take lectures from other topics.
 
-Lecture sizes are not sampled directly. Each lecture receives a target attendance based on its hidden hall capacity, and the final class size is the realized attendance count from the student-journey simulation.
+Lecture sizes are not sampled directly. They are the realized attendance counts produced by the cohort-based day-schedule simulation.
 
 ## Usage
 
@@ -71,6 +74,17 @@ python lecture_hall_experiment.py \
     --save-json
 ```
 
+Example for generating and exporting the input only:
+
+```bash
+python lecture_hall_experiment.py \
+    --num-halls 12 \
+    --slots-per-day 12 \
+    --density 0.9 \
+    --seed 1-3 \
+    --instance-only
+```
+
 ## Command-Line Arguments
 
 - `--num-halls` **(required)**: number of halls.
@@ -87,8 +101,10 @@ python lecture_hall_experiment.py \
   - `CP`: OR-Tools CP-SAT formulation.
   - `ROOT`: root-node bound of the linearized GUROBI formulation.
   - If omitted, the script solves `MIPQ`, `MIP`, and `CP`.
+- `--instance-only`: generate the instance only, print the input in a user-friendly terminal format, and write JSON export(s). No solver is run and no Excel workbook is written.
 - `--output`: Excel output path. Default: `results.xlsx`.
 - `-s`, `--save-json`: also write a JSON file with the full instance and all solutions.
+  - Not needed with `--instance-only` because JSON export is automatic there.
 - `-q`, `--quiet`: suppress solver logs.
 
 ## Linearized GUROBI Model
@@ -125,6 +141,12 @@ If `--save-json` is enabled, the script also writes a timestamped JSON file that
 - solver summaries,
 - and full solution details for any solver that produced an assignment.
 
+If `--instance-only` is used, the script instead writes timestamped instance JSON files containing:
+- generation metadata,
+- the full generated optimization input,
+- hall, lecture, distance, compatibility, and successor-pair data,
+- and no solver output.
+
 ### Console output
 
 After each run, the script prints a compact summary line with:
@@ -135,3 +157,10 @@ After each run, the script prints a compact summary line with:
 - lower bound,
 - gaps,
 - wall-clock time.
+
+With `--instance-only`, the terminal output switches to a readable instance report showing:
+- high-level instance statistics,
+- the halls table,
+- the lectures table,
+- realized successor pairs,
+- and the hall distance matrix.

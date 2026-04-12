@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
-"""Generate and solve random single-day lecture-hall assignment instances.
+"""Generate random single-day lecture-hall assignment instances.
 
-The script builds one random instance, solves it with three formulations:
-1. GUROBI bilinear MIQP
-2. GUROBI linearized MILP
-3. OR-Tools CP-SAT
-
-It then writes an Excel workbook with solver results and can optionally write
-JSON files with the full instance and all solver solutions.
+The script can either:
+1. solve a generated instance with multiple formulations and write result summaries, or
+2. print the generated optimization input and export it as JSON without solving.
 """
 
 from __future__ import annotations
 
 import argparse
-from collections import Counter
+from collections import Counter, defaultdict
 import datetime as dt
 import json
 import math
@@ -21,11 +17,12 @@ import os
 import platform
 import random
 import socket
+import statistics
 import sys
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 from gurobipy import GRB, GurobiError, Model, quicksum
@@ -93,8 +90,8 @@ class Instance:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Generate a random single-day lecture-hall assignment instance, solve it with "
-            "the selected formulation(s), and write an Excel experiment summary."
+            "Generate a random single-day lecture-hall assignment instance, then either "
+            "solve it with the selected formulation(s) or print/export the generated input."
         ),
         epilog=(
             "Density is interpreted as total lecture slots divided by total "
@@ -161,18 +158,34 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--instance-only",
+        dest="instance_only",
+        action="store_true",
+        help=(
+            "Generate the instance only, print the full optimization input in a "
+            "human-readable terminal format, and write machine-readable JSON files. "
+            "No solver is run and no Excel workbook is written."
+        ),
+    )
+    parser.add_argument(
         "--output",
         dest="output",
         type=Path,
         default=None,
-        help='Optional output workbook path. Defaults to "results.xlsx".',
+        help=(
+            'Optional output workbook path. Defaults to "results.xlsx". '
+            "In --instance-only mode, only the filename stem is used to name the JSON export(s)."
+        ),
     )
     parser.add_argument(
         "-s",
         "--save-json",
         dest="save_json",
         action="store_true",
-        help="Also write a JSON file with the full instance and all solver solutions.",
+        help=(
+            "Also write a JSON file with the full instance and all solver solutions. "
+            "This is not needed in --instance-only mode because JSON export is automatic there."
+        ),
     )
     parser.add_argument(
         "-q",
@@ -200,6 +213,8 @@ def validate_args(args: argparse.Namespace) -> None:
             args.model = "MIPQ"
         if args.model not in {"MIPQ", "MIP", "CP", "ROOT"}:
             raise SystemExit("--model must be one of MIPQ, MIP, CP, or ROOT.")
+    if args.instance_only and args.model is not None:
+        raise SystemExit("--instance-only cannot be combined with --model.")
 
 
 def ensure_output_path(path: Path | None, seed: Any, num_halls: int) -> Path:
@@ -226,6 +241,10 @@ def parse_seed_range(seed_str: str) -> list[int]:
 
 def build_json_path(output_path: Path, run_tag: str) -> Path:
     return output_path.with_name(f"{output_path.stem}_{run_tag}.json")
+
+
+def build_instance_json_path(output_path: Path, run_tag: str) -> Path:
+    return output_path.with_name(f"{output_path.stem}_instance_{run_tag}.json")
 
 
 def gurobi_thread_limit() -> int:
@@ -277,14 +296,6 @@ def balanced_course_type_flags(count: int, rng: random.Random) -> list[bool]:
     flags = [True] * compulsory_count + [False] * (count - compulsory_count)
     rng.shuffle(flags)
     return flags
-
-
-def generate_student_profiles(num_students: int, rng: random.Random) -> list[tuple[str, int]]:
-    subjects = balanced_values(SUBJECTS, num_students, rng)
-    study_years = balanced_values(STUDY_YEARS, num_students, rng)
-    profiles = list(zip(subjects, study_years, strict=True))
-    rng.shuffle(profiles)
-    return profiles
 
 
 def duration_list_for_total(total_busy_slots: int, rng: random.Random) -> list[int]:
@@ -551,43 +562,6 @@ def generate_lectures(
     return lectures
 
 
-def student_course_affinity(student_subject: str, student_year: int, lecture: Lecture) -> float:
-    year_gap = abs(student_year - lecture.study_year)
-    same_subject = student_subject == lecture.subject
-    if year_gap == 0 and same_subject:
-        base = 1.0
-    elif year_gap == 0:
-        base = 0.28
-    elif year_gap == 1 and same_subject:
-        base = 0.18
-    elif year_gap == 1:
-        base = 0.07
-    elif year_gap == 2 and same_subject:
-        base = 0.012
-    elif year_gap == 2:
-        base = 0.002
-    elif same_subject:
-        base = 0.0008
-    else:
-        base = 0.0001
-
-    course_type_multiplier = 1.0 if lecture.is_compulsory else 0.55
-    return base * course_type_multiplier
-
-
-def generate_enrollment_targets(
-    lectures: list[Lecture],
-    halls: list[Hall],
-    rng: random.Random,
-) -> dict[int, int]:
-    targets: dict[int, int] = {}
-    for lecture in lectures:
-        hall_capacity = halls[lecture.hidden_hall].capacity
-        fill_ratio = rng.uniform(0.85, 0.97)
-        targets[lecture.lecture_id] = max(8, int(math.ceil(fill_ratio * hall_capacity)))
-    return targets
-
-
 def build_successor_map(lectures: list[Lecture]) -> dict[int, list[Lecture]]:
     starts_by_day_slot: dict[tuple[int, int], list[Lecture]] = {}
     ends_by_day_slot: dict[tuple[int, int], list[Lecture]] = {}
@@ -605,58 +579,138 @@ def build_successor_map(lectures: list[Lecture]) -> dict[int, list[Lecture]]:
     return successor_map
 
 
-def first_lecture_weight(
-    student_subject: str,
-    student_year: int,
+def build_lectures_by_cohort(lectures: list[Lecture]) -> dict[tuple[str, int], list[Lecture]]:
+    lectures_by_cohort: dict[tuple[str, int], list[Lecture]] = defaultdict(list)
+    for lecture in lectures:
+        lectures_by_cohort[(lecture.subject, lecture.study_year)].append(lecture)
+    for cohort_lectures in lectures_by_cohort.values():
+        cohort_lectures.sort(key=lambda lecture: (lecture.start_slot, lecture.lecture_id))
+    return dict(lectures_by_cohort)
+
+
+def build_lectures_starting_by_slot(lectures: list[Lecture]) -> dict[int, list[Lecture]]:
+    starts_by_slot: dict[int, list[Lecture]] = defaultdict(list)
+    for lecture in lectures:
+        starts_by_slot[lecture.start_slot].append(lecture)
+    for slot_lectures in starts_by_slot.values():
+        slot_lectures.sort(key=lambda lecture: (lecture.end_slot, lecture.lecture_id))
+    return dict(starts_by_slot)
+
+
+def lecture_remaining_capacity(
     lecture: Lecture,
     attendance: dict[int, int],
-    targets: dict[int, int],
-    halls: list[Hall],
-) -> float:
-    capacity = halls[lecture.hidden_hall].capacity
-    remaining_capacity = capacity - attendance[lecture.lecture_id]
-    if remaining_capacity <= 0:
-        return 0.0
-
-    remaining_target = max(0, targets[lecture.lecture_id] - attendance[lecture.lecture_id])
-    slot_factor = math.exp(-0.28 * lecture.start_slot_in_day)
-    affinity = student_course_affinity(student_subject, student_year, lecture)
-    return affinity * slot_factor * (remaining_target + 0.10 * remaining_capacity)
+    hall_capacities: dict[int, int],
+) -> int:
+    return hall_capacities[lecture.hidden_hall] - attendance[lecture.lecture_id]
 
 
-def journey_stop_probability(
-    accumulated_slots: int,
-    classes_taken: int,
-    slots_per_day: int,
-    best_next_affinity: float,
-) -> float:
-    progress = accumulated_slots / max(1, slots_per_day)
-    base_stop_probability = 0.14 + 0.10 * max(0, classes_taken - 1) + 0.52 * (progress ** 1.7)
-    base_stop_probability = min(0.97, max(0.05, base_stop_probability))
-
-    # The decision to continue depends on how compatible the next available
-    # lectures are with the student's current topic/year trajectory.
-    continue_factor = min(1.0, 0.03 + 5.0 * best_next_affinity)
-    continue_probability = (1.0 - base_stop_probability) * continue_factor
-    return min(0.995, max(0.05, 1.0 - continue_probability))
+def overlaps_home_cohort_lecture(
+    candidate: Lecture,
+    home_lectures: list[Lecture],
+) -> bool:
+    for home_lecture in home_lectures:
+        if home_lecture.lecture_id == candidate.lecture_id:
+            continue
+        if home_lecture.end_slot <= candidate.start_slot:
+            continue
+        if home_lecture.start_slot >= candidate.end_slot:
+            break
+        return True
+    return False
 
 
-def next_lecture_weight(
-    student_subject: str,
-    student_year: int,
-    next_lecture: Lecture,
+def choose_weighted_lecture(
+    candidates: list[Lecture],
     attendance: dict[int, int],
-    targets: dict[int, int],
-    halls: list[Hall],
-) -> float:
-    capacity = halls[next_lecture.hidden_hall].capacity
-    remaining_capacity = capacity - attendance[next_lecture.lecture_id]
-    if remaining_capacity <= 0:
-        return 0.0
+    hall_capacities: dict[int, int],
+    lecture_popularity: dict[int, float],
+    rng: random.Random,
+    score_multiplier: Callable[[Lecture], float] | None = None,
+) -> Lecture | None:
+    feasible_candidates: list[Lecture] = []
+    weights: list[float] = []
+    for lecture in candidates:
+        remaining_capacity = lecture_remaining_capacity(lecture, attendance, hall_capacities)
+        if remaining_capacity <= 0:
+            continue
+        weight = lecture_popularity[lecture.lecture_id] * (remaining_capacity ** 1.05)
+        if score_multiplier is not None:
+            weight *= score_multiplier(lecture)
+        if weight <= 0:
+            continue
+        feasible_candidates.append(lecture)
+        weights.append(weight)
+    if not feasible_candidates:
+        return None
+    return rng.choices(feasible_candidates, weights=weights, k=1)[0]
 
-    remaining_target = max(0, targets[next_lecture.lecture_id] - attendance[next_lecture.lecture_id])
-    affinity = student_course_affinity(student_subject, student_year, next_lecture)
-    return (affinity ** 1.15) * (remaining_target + 0.08 * remaining_capacity)
+
+def exploratory_course_weight(student_year: int, lecture: Lecture) -> float:
+    year_gap = abs(student_year - lecture.study_year)
+    if year_gap == 0:
+        base = 0.28
+    elif year_gap == 1:
+        base = 0.08
+    else:
+        base = 0.015
+    if lecture.is_compulsory:
+        base *= 0.55
+    return base
+
+
+def estimate_cohort_sizes(
+    lectures: list[Lecture],
+    halls: list[Hall],
+    rng: random.Random,
+) -> dict[tuple[str, int], int]:
+    lectures_by_cohort = build_lectures_by_cohort(lectures)
+    hall_capacities = {hall.hall_id: hall.capacity for hall in halls}
+
+    compulsory_capacity_floors = [
+        min(hall_capacities[lecture.hidden_hall] for lecture in cohort_lectures if lecture.is_compulsory)
+        for cohort_lectures in lectures_by_cohort.values()
+        if any(lecture.is_compulsory for lecture in cohort_lectures)
+    ]
+
+    if compulsory_capacity_floors:
+        baseline_size = max(
+            12,
+            int(round(statistics.median(compulsory_capacity_floors) * rng.uniform(0.90, 0.96))),
+        )
+    else:
+        baseline_size = max(
+            12,
+            int(round(statistics.median(hall.capacity for hall in halls) * rng.uniform(0.65, 0.80))),
+        )
+
+    cohort_sizes: dict[tuple[str, int], int] = {}
+    for cohort, cohort_lectures in lectures_by_cohort.items():
+        compulsory_caps = [
+            hall_capacities[lecture.hidden_hall]
+            for lecture in cohort_lectures
+            if lecture.is_compulsory
+        ]
+        elective_caps = [
+            hall_capacities[lecture.hidden_hall]
+            for lecture in cohort_lectures
+            if not lecture.is_compulsory
+        ]
+
+        if compulsory_caps:
+            upper_bound = max(8, int(math.floor(0.98 * min(compulsory_caps))))
+            target_reference = 0.55 * baseline_size + 0.45 * upper_bound
+            target = max(8, int(round(target_reference * rng.uniform(0.97, 1.03))))
+            cohort_sizes[cohort] = min(upper_bound, target)
+        elif elective_caps:
+            upper_bound = max(8, int(math.floor(0.92 * max(elective_caps))))
+            target_reference = 0.45 * baseline_size + 0.35 * upper_bound
+            target = max(8, int(round(target_reference * rng.uniform(0.90, 1.08))))
+            cohort_sizes[cohort] = min(upper_bound, target)
+        else:
+            cohort_sizes[cohort] = max(8, int(round(0.60 * baseline_size)))
+
+    return cohort_sizes
 
 
 def simulate_student_journeys(
@@ -665,92 +719,145 @@ def simulate_student_journeys(
     slots_per_day: int,
     rng: random.Random,
 ) -> tuple[list[Lecture], dict[tuple[int, int], int]]:
+    lectures_by_cohort = build_lectures_by_cohort(lectures)
+    starts_by_slot = build_lectures_starting_by_slot(lectures)
     successor_map = build_successor_map(lectures)
-    targets = generate_enrollment_targets(lectures, halls, rng)
+    hall_capacities = {hall.hall_id: hall.capacity for hall in halls}
+    cohort_sizes = estimate_cohort_sizes(lectures, halls, rng)
     attendance = {lecture.lecture_id: 0 for lecture in lectures}
     common_students: dict[tuple[int, int], int] = {}
+    lecture_popularity = {
+        lecture.lecture_id: (
+            rng.uniform(0.98, 1.03)
+            if lecture.is_compulsory
+            else rng.uniform(0.85, 1.20)
+        )
+        for lecture in lectures
+    }
 
-    total_target = sum(targets.values())
-    expected_classes_per_student = 2.3
-    total_students = max(
-        len(lectures),
-        int(math.ceil(1.08 * total_target / max(1.0, expected_classes_per_student))),
-    )
+    students = [
+        (subject, study_year)
+        for (subject, study_year), cohort_size in cohort_sizes.items()
+        for _ in range(cohort_size)
+    ]
+    rng.shuffle(students)
 
-    def simulate_batch(num_students: int) -> None:
-        for student_subject, student_year in generate_student_profiles(num_students, rng):
-            first_candidates = []
-            first_weights = []
-            for lecture in lectures:
-                weight = first_lecture_weight(
-                    student_subject,
-                    student_year,
-                    lecture,
-                    attendance,
-                    targets,
-                    halls,
-                )
-                if weight <= 0:
-                    continue
-                first_candidates.append(lecture)
-                first_weights.append(weight)
-            if not first_candidates:
-                return
+    for student_subject, student_year in students:
+        home_lectures = lectures_by_cohort.get((student_subject, student_year), [])
+        compulsory_attendance_rate = min(0.998, max(0.95, rng.gauss(0.988, 0.006)))
+        elective_attendance_rate = min(0.94, max(0.58, rng.gauss(0.79, 0.08)))
+        previous_year_rate = min(0.16, max(0.01, rng.gauss(0.06, 0.02)))
+        other_topic_rate = min(0.03, max(0.0, rng.gauss(0.008, 0.004)))
 
-            current_lecture = rng.choices(first_candidates, weights=first_weights, k=1)[0]
-            accumulated_slots = 0
-            classes_taken = 0
+        attended_lectures: list[Lecture] = []
+        slot = 0
+        while slot < slots_per_day:
+            starting_lectures = starts_by_slot.get(slot, [])
+            if not starting_lectures:
+                slot += 1
+                continue
 
-            while True:
-                attendance[current_lecture.lecture_id] += 1
-                accumulated_slots += current_lecture.duration
-                classes_taken += 1
+            available_lectures = [
+                lecture
+                for lecture in starting_lectures
+                if lecture_remaining_capacity(lecture, attendance, hall_capacities) > 0
+            ]
+            if not available_lectures:
+                slot += 1
+                continue
 
-                next_candidates = []
-                next_weights = []
-                for next_lecture in successor_map.get(current_lecture.lecture_id, []):
-                    weight = next_lecture_weight(
-                        student_subject,
-                        student_year,
-                        next_lecture,
-                        attendance,
-                        targets,
-                        halls,
+            home_compulsory = [
+                lecture
+                for lecture in available_lectures
+                if lecture.subject == student_subject
+                and lecture.study_year == student_year
+                and lecture.is_compulsory
+            ]
+            if home_compulsory:
+                chosen_lecture = home_compulsory[0]
+                if rng.random() < compulsory_attendance_rate:
+                    attendance[chosen_lecture.lecture_id] += 1
+                    attended_lectures.append(chosen_lecture)
+                    slot = chosen_lecture.end_slot
+                else:
+                    slot += 1
+                continue
+
+            home_electives = [
+                lecture
+                for lecture in available_lectures
+                if lecture.subject == student_subject
+                and lecture.study_year == student_year
+                and not lecture.is_compulsory
+            ]
+            if home_electives:
+                if rng.random() < elective_attendance_rate:
+                    chosen_lecture = choose_weighted_lecture(
+                        candidates=home_electives,
+                        attendance=attendance,
+                        hall_capacities=hall_capacities,
+                        lecture_popularity=lecture_popularity,
+                        rng=rng,
                     )
-                    if weight <= 0:
+                    if chosen_lecture is not None:
+                        attendance[chosen_lecture.lecture_id] += 1
+                        attended_lectures.append(chosen_lecture)
+                        slot = chosen_lecture.end_slot
                         continue
-                    next_candidates.append(next_lecture)
-                    next_weights.append(weight)
+                slot += 1
+                continue
 
-                if not next_candidates:
-                    break
-
-                stop_probability = journey_stop_probability(
-                    accumulated_slots,
-                    classes_taken,
-                    slots_per_day,
-                    max(
-                        student_course_affinity(student_subject, student_year, next_lecture)
-                        for next_lecture in next_candidates
-                    ),
+            previous_year_candidates = [
+                lecture
+                for lecture in available_lectures
+                if lecture.subject == student_subject
+                and lecture.study_year == student_year - 1
+                and not lecture.is_compulsory
+                and not overlaps_home_cohort_lecture(lecture, home_lectures)
+            ]
+            if previous_year_candidates and rng.random() < previous_year_rate:
+                chosen_lecture = choose_weighted_lecture(
+                    candidates=previous_year_candidates,
+                    attendance=attendance,
+                    hall_capacities=hall_capacities,
+                    lecture_popularity=lecture_popularity,
+                    rng=rng,
                 )
-                if rng.random() < stop_probability:
-                    break
+                if chosen_lecture is not None:
+                    attendance[chosen_lecture.lecture_id] += 1
+                    attended_lectures.append(chosen_lecture)
+                    slot = chosen_lecture.end_slot
+                    continue
 
-                next_lecture = rng.choices(next_candidates, weights=next_weights, k=1)[0]
+            other_topic_candidates = [
+                lecture
+                for lecture in available_lectures
+                if lecture.subject != student_subject
+                and not lecture.is_compulsory
+                and not overlaps_home_cohort_lecture(lecture, home_lectures)
+            ]
+            if other_topic_candidates and rng.random() < other_topic_rate:
+                chosen_lecture = choose_weighted_lecture(
+                    candidates=other_topic_candidates,
+                    attendance=attendance,
+                    hall_capacities=hall_capacities,
+                    lecture_popularity=lecture_popularity,
+                    rng=rng,
+                    score_multiplier=lambda lecture: exploratory_course_weight(student_year, lecture),
+                )
+                if chosen_lecture is not None:
+                    attendance[chosen_lecture.lecture_id] += 1
+                    attended_lectures.append(chosen_lecture)
+                    slot = chosen_lecture.end_slot
+                    continue
+
+            slot += 1
+
+        for current_lecture, next_lecture in zip(attended_lectures, attended_lectures[1:], strict=False):
+            if current_lecture.day == next_lecture.day and current_lecture.end_slot == next_lecture.start_slot:
                 common_students[(current_lecture.lecture_id, next_lecture.lecture_id)] = (
                     common_students.get((current_lecture.lecture_id, next_lecture.lecture_id), 0) + 1
                 )
-                current_lecture = next_lecture
-
-    simulate_batch(total_students)
-
-    for _ in range(4):
-        deficit = sum(max(0, targets[lecture.lecture_id] - attendance[lecture.lecture_id]) for lecture in lectures)
-        if deficit <= 0.08 * total_target:
-            break
-        extra_students = int(math.ceil(deficit / max(1.0, expected_classes_per_student - 0.3)))
-        simulate_batch(extra_students)
 
     updated_lectures = [
         replace(lecture, students=attendance[lecture.lecture_id])
@@ -758,14 +865,12 @@ def simulate_student_journeys(
     ]
 
     if not common_students:
-        fallback_subject, fallback_year = generate_student_profiles(1, rng)[0]
         weighted_pairs = [
             (
                 prev_lecture.lecture_id,
                 next_lecture.lecture_id,
                 (
-                    student_course_affinity(fallback_subject, fallback_year, next_lecture)
-                    * max(1, attendance[prev_lecture.lecture_id] + attendance[next_lecture.lecture_id])
+                    max(1, attendance[prev_lecture.lecture_id] + attendance[next_lecture.lecture_id])
                 ),
             )
             for prev_lecture in lectures
@@ -1648,6 +1753,23 @@ def build_json_payload(
     }
 
 
+def build_instance_json_payload(
+    instance: Instance,
+    generated_at: dt.datetime,
+) -> dict[str, Any]:
+    return {
+        "export_type": "instance_only",
+        "generation": {
+            "generated_at": generated_at.isoformat(),
+            "host": socket.gethostname(),
+            "platform": platform.platform(),
+            "python_version": sys.version.split()[0],
+            "command_line": sys.argv,
+        },
+        "instance": instance_to_json_dict(instance),
+    }
+
+
 def write_excel(
     output_path: Path,
     summary_rows: list[dict[str, Any]],
@@ -1671,6 +1793,150 @@ def write_json(output_path: Path, payload: dict[str, Any]) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
+
+
+def render_text_table(
+    headers: list[str],
+    rows: list[list[Any]],
+    right_align_columns: set[int] | None = None,
+) -> str:
+    right_align_columns = right_align_columns or set()
+    string_rows = [[str(cell) for cell in row] for row in rows]
+    widths = [len(header) for header in headers]
+    for row in string_rows:
+        for index, cell in enumerate(row):
+            widths[index] = max(widths[index], len(cell))
+
+    def format_row(row: list[str]) -> str:
+        formatted_cells = []
+        for index, cell in enumerate(row):
+            if index in right_align_columns:
+                formatted_cells.append(cell.rjust(widths[index]))
+            else:
+                formatted_cells.append(cell.ljust(widths[index]))
+        return "  ".join(formatted_cells)
+
+    lines = [format_row(headers), format_row(["-" * width for width in widths])]
+    lines.extend(format_row(row) for row in string_rows)
+    return "\n".join(lines)
+
+
+def print_instance_console_view(instance: Instance, json_path: Path) -> None:
+    hall_map = {hall.hall_id: hall for hall in instance.halls}
+    lecture_map = {lecture.lecture_id: lecture for lecture in instance.lectures}
+    total_common_students = sum(instance.common_students.values())
+    candidate_successors = sum(
+        1
+        for lecture in instance.lectures
+        for follower in instance.lectures
+        if lecture.day == follower.day and lecture.end_slot == follower.start_slot
+    )
+    min_compatibility = min(len(halls) for halls in instance.compatibility.values()) if instance.compatibility else 0
+    max_distance = max(max(row) for row in instance.distances) if instance.distances else 0
+
+    print("=" * 88)
+    print(f"Generated instance input | seed={instance.seed}")
+    print("=" * 88)
+    print(
+        "Overview: "
+        f"halls={instance.num_halls}, lectures={len(instance.lectures)}, "
+        f"slots/day={instance.slots_per_day}, density={instance.density_actual:.3f} "
+        f"(target {instance.density_target:.3f})"
+    )
+    print(
+        "Structure: "
+        f"successor pairs={len(instance.common_students)}/{candidate_successors}, "
+        f"total common students={total_common_students}, "
+        f"min compatible halls per lecture={min_compatibility}, max distance={max_distance}"
+    )
+    print(f"JSON written to: {json_path}")
+    print("")
+
+    hall_rows = [
+        [
+            hall.hall_id,
+            hall.name,
+            hall.capacity,
+            f"{hall.x:.3f}",
+            f"{hall.y:.3f}",
+        ]
+        for hall in instance.halls
+    ]
+    print("Halls")
+    print(
+        render_text_table(
+            headers=["id", "name", "capacity", "x", "y"],
+            rows=hall_rows,
+            right_align_columns={0, 2, 3, 4},
+        )
+    )
+    print("")
+
+    lecture_rows = []
+    for lecture in instance.lectures:
+        slot_end_in_day = lecture.start_slot_in_day + lecture.duration - 1
+        compatible_halls = ",".join(
+            hall_map[hall_id].name for hall_id in instance.compatibility[lecture.lecture_id]
+        )
+        lecture_rows.append(
+            [
+                lecture.lecture_id,
+                lecture.name,
+                lecture.subject,
+                f"Y{lecture.study_year}",
+                "compulsory" if lecture.is_compulsory else "elective",
+                lecture.day + 1,
+                f"{lecture.start_slot_in_day}-{slot_end_in_day}",
+                lecture.duration,
+                lecture.students,
+                compatible_halls,
+            ]
+        )
+    print("Lectures")
+    print(
+        render_text_table(
+            headers=["id", "name", "subject", "year", "type", "day", "slots", "dur", "students", "compatible"],
+            rows=lecture_rows,
+            right_align_columns={0, 5, 7, 8},
+        )
+    )
+    print("")
+
+    print("Successor pairs")
+    if instance.common_students:
+        successor_rows = [
+            [
+                lecture_id_1,
+                lecture_map[lecture_id_1].name,
+                lecture_id_2,
+                lecture_map[lecture_id_2].name,
+                common_count,
+            ]
+            for (lecture_id_1, lecture_id_2), common_count in sorted(instance.common_students.items())
+        ]
+        print(
+            render_text_table(
+                headers=["from", "from_name", "to", "to_name", "common_students"],
+                rows=successor_rows,
+                right_align_columns={0, 2, 4},
+            )
+        )
+    else:
+        print("(none)")
+    print("")
+
+    distance_rows = []
+    hall_headers = ["from/to"] + [hall.name for hall in instance.halls]
+    for hall in instance.halls:
+        distance_rows.append([hall.name] + instance.distances[hall.hall_id])
+    print("Distance matrix")
+    print(
+        render_text_table(
+            headers=hall_headers,
+            rows=distance_rows,
+            right_align_columns=set(range(1, len(hall_headers))),
+        )
+    )
 
 
 def print_console_summary(output_path: Path, summary_rows: list[dict[str, Any]]) -> None:
@@ -1705,7 +1971,7 @@ def main() -> None:
     
     all_summary_rows = []
 
-    for seed in seeds:
+    for index, seed in enumerate(seeds):
         run_tag = f"{base_run_tag}_seed{seed}"
         instance = build_instance(
             num_halls=args.num_halls,
@@ -1713,6 +1979,16 @@ def main() -> None:
             seed=seed,
             density=args.density,
         )
+
+        if args.instance_only:
+            generated_at = dt.datetime.now().astimezone()
+            json_path = build_instance_json_path(output_path, run_tag)
+            payload = build_instance_json_payload(instance=instance, generated_at=generated_at)
+            write_json(json_path, payload)
+            if index > 0:
+                print("")
+            print_instance_console_view(instance, json_path)
+            continue
 
         if args.model is None:
             results = [
@@ -1777,8 +2053,9 @@ def main() -> None:
             )
             write_json(json_path, payload)
             print(f"JSON written to: {json_path}")
-            
-    print_console_summary(output_path, all_summary_rows)
+
+    if not args.instance_only:
+        print_console_summary(output_path, all_summary_rows)
 
 
 if __name__ == "__main__":
