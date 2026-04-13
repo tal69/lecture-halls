@@ -440,6 +440,192 @@ def add_cohort_slot_usage(
             slot_usage[key] = (compulsory_count, elective_count + 1)
 
 
+def build_lecture_slot_coverage(lecture_slots: list[dict[str, int]]) -> dict[int, list[int]]:
+    slot_coverage: dict[int, list[int]] = defaultdict(list)
+    for lecture_index, lecture_slot in enumerate(lecture_slots):
+        for slot in range(lecture_slot["start_slot"], lecture_slot["end_slot"]):
+            slot_coverage[slot].append(lecture_index)
+    return dict(slot_coverage)
+
+
+def assign_course_type_flags_exact(
+    lecture_slots: list[dict[str, int]],
+    slot_coverage: dict[int, list[int]],
+    compulsory_count: int,
+    rng: random.Random,
+) -> list[bool] | None:
+    if compulsory_count < 0 or compulsory_count > len(lecture_slots):
+        return None
+
+    num_cohorts = len(SUBJECTS) * len(STUDY_YEARS)
+    model = cp_model.CpModel()
+    compulsory_vars = [model.NewBoolVar(f"compulsory_l{lecture_index}") for lecture_index in range(len(lecture_slots))]
+    model.Add(sum(compulsory_vars) == compulsory_count)
+
+    for lecture_indices in slot_coverage.values():
+        max_compulsory_lectures = 2 * num_cohorts - len(lecture_indices)
+        if max_compulsory_lectures < 0:
+            return None
+        model.Add(sum(compulsory_vars[lecture_index] for lecture_index in lecture_indices) <= max_compulsory_lectures)
+
+    weighted_cost_terms = []
+    for lecture_index, lecture_slot in enumerate(lecture_slots):
+        duration = lecture_slot["end_slot"] - lecture_slot["start_slot"]
+        congestion = sum(
+            len(slot_coverage[slot])
+            for slot in range(lecture_slot["start_slot"], lecture_slot["end_slot"])
+        )
+        tie_breaker = rng.randint(0, 9)
+        weighted_cost_terms.append((1000 * duration + 10 * congestion + tie_breaker) * compulsory_vars[lecture_index])
+    model.Minimize(sum(weighted_cost_terms))
+
+    solver = cp_model.CpSolver()
+    solver.parameters.num_search_workers = gurobi_thread_limit()
+    solver.parameters.random_seed = rng.randint(1, 2_000_000_000)
+    status = solver.Solve(model)
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return None
+
+    return [solver.BooleanValue(var) for var in compulsory_vars]
+
+
+def assign_subject_year_pairs_exact(
+    lecture_slots: list[dict[str, int]],
+    slot_coverage: dict[int, list[int]],
+    compulsory_flags: list[bool],
+    subject_counts: Counter[str],
+    year_counts: Counter[int],
+    rng: random.Random,
+) -> list[tuple[str, int]] | None:
+    model = cp_model.CpModel()
+    assignment_vars: dict[tuple[int, str, int], cp_model.IntVar] = {}
+    subject_vars: dict[str, list[cp_model.IntVar]] = {subject: [] for subject in SUBJECTS}
+    year_vars: dict[int, list[cp_model.IntVar]] = {study_year: [] for study_year in STUDY_YEARS}
+
+    lecture_order = sorted(
+        range(len(lecture_slots)),
+        key=lambda lecture_index: (
+            -sum(
+                len(slot_coverage[slot])
+                for slot in range(
+                    lecture_slots[lecture_index]["start_slot"],
+                    lecture_slots[lecture_index]["end_slot"],
+                )
+            ),
+            -(lecture_slots[lecture_index]["end_slot"] - lecture_slots[lecture_index]["start_slot"]),
+            lecture_slots[lecture_index]["start_slot"],
+        ),
+    )
+    ordered_decision_vars: list[cp_model.IntVar] = []
+
+    for lecture_index in range(len(lecture_slots)):
+        lecture_choice_vars: list[cp_model.IntVar] = []
+        shuffled_subjects = list(SUBJECTS)
+        shuffled_years = list(STUDY_YEARS)
+        rng.shuffle(shuffled_subjects)
+        rng.shuffle(shuffled_years)
+        for subject in shuffled_subjects:
+            for study_year in shuffled_years:
+                var = model.NewBoolVar(f"cohort_l{lecture_index}_{subject}_{study_year}")
+                assignment_vars[(lecture_index, subject, study_year)] = var
+                lecture_choice_vars.append(var)
+                subject_vars[subject].append(var)
+                year_vars[study_year].append(var)
+        model.AddExactlyOne(lecture_choice_vars)
+
+    for lecture_index in lecture_order:
+        for subject in SUBJECTS:
+            for study_year in STUDY_YEARS:
+                ordered_decision_vars.append(assignment_vars[(lecture_index, subject, study_year)])
+    model.AddDecisionStrategy(
+        ordered_decision_vars,
+        cp_model.CHOOSE_FIRST,
+        cp_model.SELECT_MAX_VALUE,
+    )
+
+    for subject in SUBJECTS:
+        model.Add(sum(subject_vars[subject]) == subject_counts.get(subject, 0))
+    for study_year in STUDY_YEARS:
+        model.Add(sum(year_vars[study_year]) == year_counts.get(study_year, 0))
+
+    for lecture_indices in slot_coverage.values():
+        for subject in SUBJECTS:
+            for study_year in STUDY_YEARS:
+                model.Add(
+                    sum(
+                        (2 if compulsory_flags[lecture_index] else 1)
+                        * assignment_vars[(lecture_index, subject, study_year)]
+                        for lecture_index in lecture_indices
+                    )
+                    <= 2
+                )
+
+    solver = cp_model.CpSolver()
+    solver.parameters.num_search_workers = gurobi_thread_limit()
+    solver.parameters.random_seed = rng.randint(1, 2_000_000_000)
+    status = solver.Solve(model)
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return None
+
+    assignments: list[tuple[str, int]] = []
+    for lecture_index in range(len(lecture_slots)):
+        selected_assignment: tuple[str, int] | None = None
+        for subject in SUBJECTS:
+            for study_year in STUDY_YEARS:
+                if solver.BooleanValue(assignment_vars[(lecture_index, subject, study_year)]):
+                    selected_assignment = (subject, study_year)
+                    break
+            if selected_assignment is not None:
+                break
+        if selected_assignment is None:
+            return None
+        assignments.append(selected_assignment)
+
+    return assignments
+
+
+def assign_balanced_course_attributes_exact(
+    lecture_slots: list[dict[str, int]],
+    subject_counts: Counter[str],
+    year_counts: Counter[int],
+    course_type_counts: Counter[bool],
+    rng: random.Random,
+) -> list[tuple[str, int, bool]] | None:
+    if not lecture_slots:
+        return []
+
+    target_compulsory_count = course_type_counts.get(True, 0)
+    slot_coverage = build_lecture_slot_coverage(lecture_slots)
+
+    for compulsory_count in range(target_compulsory_count, -1, -1):
+        compulsory_flags = assign_course_type_flags_exact(
+            lecture_slots=lecture_slots,
+            slot_coverage=slot_coverage,
+            compulsory_count=compulsory_count,
+            rng=rng,
+        )
+        if compulsory_flags is None:
+            continue
+
+        subject_year_assignments = assign_subject_year_pairs_exact(
+            lecture_slots=lecture_slots,
+            slot_coverage=slot_coverage,
+            compulsory_flags=compulsory_flags,
+            subject_counts=subject_counts,
+            year_counts=year_counts,
+            rng=rng,
+        )
+        if subject_year_assignments is None:
+            continue
+
+        return [
+            (subject, study_year, compulsory_flags[lecture_index])
+            for lecture_index, (subject, study_year) in enumerate(subject_year_assignments)
+        ]
+
+    return None
+
+
 def assign_balanced_course_attributes(
     lecture_slots: list[dict[str, int]],
     rng: random.Random,
@@ -518,6 +704,18 @@ def assign_balanced_course_attributes(
 
         if success and all(assignment is not None for assignment in assignments):
             return [assignment for assignment in assignments if assignment is not None]
+
+    # Dense large instances can defeat the randomized greedy construction even when a
+    # balanced feasible assignment exists. Fall back to an exact feasibility model.
+    exact_assignments = assign_balanced_course_attributes_exact(
+        lecture_slots=lecture_slots,
+        subject_counts=subject_counts,
+        year_counts=year_counts,
+        course_type_counts=course_type_counts,
+        rng=rng,
+    )
+    if exact_assignments is not None:
+        return exact_assignments
 
     raise RuntimeError("Failed to assign balanced lecture attributes under cohort overlap rules.")
 

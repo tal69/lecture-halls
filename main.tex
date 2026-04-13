@@ -20,9 +20,9 @@
 \maketitle
 
 \section{Introduction}
-Universities and colleages often determine the courses timetable well before they assign lectures to specific halls. Once the timetable is fixed and student registration is completed, the institution knows both the size of each lecture and, to some extent, the overlap in enrollment between consecutive lectures. At that stage, the hall-assignment decision can have a substantial effect on student mobility across campus. Assigning consecutive lectures attended by many of the same students to distant halls may generate unnecessary walking, even when every lecture is assigned to a feasible room. In practice, long walks between halls may also cause students to arrive late to their next class, thereby disrupting the beginning of the lecture.
+Universities and colleages often determine the courses timetable well before they assign lectures to specific halls. Once the timetable is fixed and student registration is completed, the institution knows both the size of each lecture and, to some extent, the overlap in enrollment between consecutive lectures. At that stage, the hall-assignment decision can have a substantial effect on student mobility across campus. Assigning consecutive lectures attended by many of the same students to distant halls may generate unnecessary walking, even when every lecture is assigned to a feasible room. In practice, long walks between halls may also cause students to arrive late at their next class, thereby disrupting the beginning of lecture.  It may also be particularlly challanging to students with mobility disablities.
 
-This observation motivates a lecture-hall assignment problem that is separate from the timetabling problem itself. The timetable, including the scheduled time interval of each lecture, is taken as given. The remaining task is to assign lectures to halls in a way that respects room capacities and temporal compatibility, while also reducing the walking burden imposed on students as they move between consecutive classes.
+This observation motivates a lecture-hall assignment problem that is separate from the timetabling itself. In the lecture-hall assignment problem, the timetable, including the scheduled time interval of each lecture, is  given. The remaining task is to assign lectures to halls in a way that respects room capacities and temporal compatibility, while also reducing the walking burden imposed on students as they move between consecutive classes.
 
 We consider this problem through the following sets:
 \begin{description}
@@ -31,12 +31,76 @@ We consider this problem through the following sets:
     \item[Immediate-successor relation ($A$)] A relation $A \subseteq L \times L$, where $(l_1,l_2) \in A$ if lecture $l_2$ is scheduled immediately after lecture $l_1$ for at least one group of students.
     \end{description}   
 
-The walking distance between each pair of halls $h_1, h_2 \in H$ is given by the distance matrix $d_{h_1,h_2}$. In addition, for each pair of lectures $(l_1,l_2) \in A$, we are given the number of students enrolled in both classes, denoted by $c_{l_1,l_2}$.
+The walking distance between each pair of halls $h_1, h_2 \in H$ is given by the distance matrix $d_{h_1,h_2}$. In addition, for each pair of lectures $(l_1,l_2) \in A$, we are given the number of students enrolled in both classes, denoted by $c_{l_1,l_2}$.  This mumber may be a simple head count or a score that gives higher weight to students with disabilities, if the instituation has this infomration at its disposle. 
 
 
 The goal is to assign each lecture to a hall with sufficient capacity, such that no two lectures assigned to the same hall overlap in time. The objective is to minimize the total walking distance walked by students between consecutive classes.
 
 This problem shares features with both the quadratic assignment problem and interval scheduling, and in a sense it combines elements of both.
+
+\paragraph{Computational complexity.} A natural decision version of the lecture-hall assignment problem asks whether, for a given bound $B$, there exists a feasible hall assignment whose total walking cost is at most $B$. This decision problem belongs to NP, since a proposed assignment can be verified in polynomial time by checking compatibility, non-overlap, and the resulting objective value. The next proposition shows that the problem is already NP-hard in a highly restricted special case.
+
+\textbf{Proposition.} The decision version of the lecture-hall assignment problem is NP-complete. Consequently, the corresponding optimization problem is NP-hard. This remains true even for a single-day instance with two consecutive time blocks, identical hall capacities, and full lecture--hall compatibility.
+
+\textit{Proof.} We give a polynomial reduction from the classical quadratic assignment problem (QAP), which is NP-hard \citep{koopmans1957,burkard1998,loiola2007}. Consider a QAP instance with facilities $F=\{1,\dots,n\}$, locations $R=\{1,\dots,n\}$, nonnegative flow matrix $(f_{ij})$, nonnegative distance matrix $(d_{ab})$, and threshold $K$. First, replace the distance matrix by
+\[
+\hat d_{aa}=0 \quad \forall a \in R,
+\qquad
+\hat d_{ab}=d_{ab}+1 \quad \forall a \neq b.
+\]
+This yields an equivalent QAP instance: for every permutation $\pi$ of the locations,
+\[
+\sum_{i=1}^n \sum_{j=1}^n f_{ij} \hat d_{\pi(i),\pi(j)}
+=
+\sum_{i=1}^n \sum_{j=1}^n f_{ij} d_{\pi(i),\pi(j)}
++
+\sum_{i \neq j} f_{ij},
+\]
+because $\pi(i) \neq \pi(j)$ whenever $i \neq j$. Hence the original QAP instance is a yes-instance if and only if the normalized one is a yes-instance for the shifted bound
+\[
+\hat K = K + \sum_{i \neq j} f_{ij}.
+\]
+
+We now construct a lecture-hall assignment instance. Create $n$ halls $h_1,\dots,h_n$, all with the same capacity and all mutually compatible with every lecture. Create $2n$ lectures, split into two time blocks:
+\[
+U=\{u_1,\dots,u_n\}
+\qquad \text{and} \qquad
+V=\{v_1,\dots,v_n\}.
+\]
+All lectures in $U$ occupy the first block and therefore pairwise overlap; all lectures in $V$ occupy the second block and therefore pairwise overlap; and every lecture in $V$ starts immediately after every lecture in $U$ ends. Because the $n$ lectures in each block overlap pairwise and there are exactly $n$ halls, every feasible assignment induces two permutations of the halls: one permutation $\pi$ for the lectures in $U$, and one permutation $\sigma$ for the lectures in $V$.
+
+Set the successor-pair weights as follows. For every $i,j \in \{1,\dots,n\}$, include the pair $(u_i,v_j)$ in the successor set and define
+\[
+c_{u_i,v_j}=
+\begin{cases}
+f_{ij} + M, & \text{if } i=j,\\
+f_{ij}, & \text{if } i \neq j,
+\end{cases}
+\]
+where $M$ is any integer strictly larger than $\hat K$. The hall-to-hall distances are given by the normalized QAP distances:
+\[
+d_{h_a,h_b} = \hat d_{ab} \qquad \forall a,b \in \{1,\dots,n\}.
+\]
+Under a feasible lecture-hall assignment corresponding to permutations $\pi$ and $\sigma$, the objective value is
+\[
+\sum_{i=1}^n \sum_{j=1}^n f_{ij}\hat d_{\pi(i),\sigma(j)}
++
+M \sum_{i=1}^n \hat d_{\pi(i),\sigma(i)}.
+\]
+
+If $\pi \neq \sigma$, then there exists some $i$ such that $\pi(i) \neq \sigma(i)$. By construction of $\hat d$, this implies $\hat d_{\pi(i),\sigma(i)} \ge 1$, and therefore
+\[
+M \sum_{i=1}^n \hat d_{\pi(i),\sigma(i)} \ge M > \hat K.
+\]
+Since all other terms are nonnegative, any feasible assignment with objective value at most $\hat K$ must satisfy $\pi=\sigma$.
+
+Conversely, if $\pi=\sigma$, then $\hat d_{\pi(i),\sigma(i)}=0$ for every $i$, so the penalty term vanishes and the lecture-hall objective reduces to
+\[
+\sum_{i=1}^n \sum_{j=1}^n f_{ij}\hat d_{\pi(i),\pi(j)},
+\]
+which is exactly the objective of the normalized QAP instance. Therefore the normalized QAP instance admits a permutation of cost at most $\hat K$ if and only if the constructed lecture-hall instance admits a feasible assignment of cost at most $\hat K$.
+
+The construction is polynomial, so the decision version of the lecture-hall assignment problem is NP-hard. Since it also belongs to NP, it is NP-complete. Consequently, the optimization problem is NP-hard. \hfill $\square$
 
 \section{Literature review}
 The proposed model is related to three main streams of literature: the quadratic assignment problem (QAP), classroom assignment and interval scheduling, and university course timetabling. The closest conceptual link to the QAP is the presence of pairwise interaction costs: assigning two lectures to two halls creates a cost that depends jointly on the distance between the halls and on the number of students who attend both lectures. This is analogous to the flow--distance structure that defines the classical QAP introduced by \citet{koopmans1957} and surveyed extensively by \citet{burkard1998} and \citet{loiola2007}. At the same time, the present problem differs from the standard QAP because feasibility is driven by temporal overlap, room capacities, and the subset of lecture pairs that are consecutive on the same day.
