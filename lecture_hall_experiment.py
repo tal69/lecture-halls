@@ -85,6 +85,14 @@ class Instance:
     common_students: dict[tuple[int, int], int]
     compatibility: dict[int, list[int]]
     active_lectures_by_slot: dict[int, list[int]]
+    compatibility_preprocess_mode: str = "none"
+    compatibility_entries_before: int = 0
+    compatibility_entries_after: int = 0
+    compatibility_preprocess_subproblems: int = 0
+    compatibility_preprocess_wall_seconds: float = 0.0
+    compatibility_preprocess_tightened_lectures: int = 0
+    compatibility_preprocess_optimal_subproblems: int = 0
+    compatibility_preprocess_nonoptimal_subproblems: int = 0
 
 
 def parse_args() -> argparse.Namespace:
@@ -156,6 +164,20 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Optional single model to solve: MIPQ, MIP, CP, or ROOT. "
             "When omitted, the script solves the three original models."
+        ),
+    )
+    parser.add_argument(
+        "--compatibility-preprocess",
+        "--compatibility_preprocess",
+        dest="compatibility_preprocess",
+        type=str,
+        choices=("none", "full", "light"),
+        default="none",
+        help=(
+            "Optional CP-SAT preprocessing that shrinks the compatible-hall sets. "
+            "Modes: none = disabled, full = maximize the target lecture hall size "
+            "over all lectures, light = same maximization restricted to the target "
+            "lecture and lectures that overlap it. Default: none."
         ),
     )
     parser.add_argument(
@@ -714,6 +736,43 @@ def estimate_cohort_sizes(
     return cohort_sizes
 
 
+def tighten_attendance_to_hidden_halls(
+    lectures: list[Lecture],
+    halls: list[Hall],
+    attendance: dict[int, int],
+    rng: random.Random,
+) -> dict[int, int]:
+    hall_capacity_by_id = {hall.hall_id: hall.capacity for hall in halls}
+    distinct_capacities = sorted({hall.capacity for hall in halls})
+    previous_capacity_by_capacity: dict[int, int] = {}
+    previous_capacity = 0
+    for capacity in distinct_capacities:
+        previous_capacity_by_capacity[capacity] = previous_capacity
+        previous_capacity = capacity
+
+    tightened_attendance: dict[int, int] = {}
+    for lecture in lectures:
+        hidden_capacity = hall_capacity_by_id[lecture.hidden_hall]
+        previous_capacity = previous_capacity_by_capacity[hidden_capacity]
+        if lecture.is_compulsory:
+            occupancy_floor, occupancy_ceiling = 0.92, 0.98
+        else:
+            occupancy_floor, occupancy_ceiling = 0.86, 0.95
+
+        occupancy_target = int(math.floor(hidden_capacity * rng.uniform(occupancy_floor, occupancy_ceiling)))
+        if previous_capacity > 0:
+            rank_target = previous_capacity + 1
+        else:
+            rank_target = max(8, int(math.floor(0.82 * hidden_capacity)))
+
+        tightened_attendance[lecture.lecture_id] = min(
+            hidden_capacity,
+            max(attendance[lecture.lecture_id], occupancy_target, rank_target),
+        )
+
+    return tightened_attendance
+
+
 def simulate_student_journeys(
     lectures: list[Lecture],
     halls: list[Hall],
@@ -860,8 +919,14 @@ def simulate_student_journeys(
                     common_students.get((current_lecture.lecture_id, next_lecture.lecture_id), 0) + 1
                 )
 
+    tightened_attendance = tighten_attendance_to_hidden_halls(
+        lectures=lectures,
+        halls=halls,
+        attendance=attendance,
+        rng=rng,
+    )
     updated_lectures = [
-        replace(lecture, students=attendance[lecture.lecture_id])
+        replace(lecture, students=tightened_attendance[lecture.lecture_id])
         for lecture in lectures
     ]
 
@@ -921,6 +986,7 @@ def build_instance(
     total_lecture_length = sum(lecture.duration for lecture in lectures)
     total_capacity = num_halls * DAYS_PER_WEEK * slots_per_day
     density_actual = total_lecture_length / total_capacity
+    compatibility_entries = sum(len(hall_ids) for hall_ids in compatibility.values())
     return Instance(
         seed=seed,
         num_halls=num_halls,
@@ -934,6 +1000,180 @@ def build_instance(
         common_students=common_students,
         compatibility=compatibility,
         active_lectures_by_slot=active_lectures_by_slot,
+        compatibility_preprocess_mode="none",
+        compatibility_entries_before=compatibility_entries,
+        compatibility_entries_after=compatibility_entries,
+        compatibility_preprocess_subproblems=0,
+        compatibility_preprocess_wall_seconds=0.0,
+        compatibility_preprocess_tightened_lectures=0,
+        compatibility_preprocess_optimal_subproblems=0,
+        compatibility_preprocess_nonoptimal_subproblems=0,
+    )
+
+
+def build_overlap_neighbors(instance: Instance) -> dict[int, set[int]]:
+    neighbors = {lecture.lecture_id: set() for lecture in instance.lectures}
+    for active_lectures in instance.active_lectures_by_slot.values():
+        if len(active_lectures) <= 1:
+            continue
+        for index, lecture_id_1 in enumerate(active_lectures):
+            for lecture_id_2 in active_lectures[index + 1 :]:
+                neighbors[lecture_id_1].add(lecture_id_2)
+                neighbors[lecture_id_2].add(lecture_id_1)
+    return neighbors
+
+
+def cp_sat_capacity_upper_bound(
+    instance: Instance,
+    compatibility: dict[int, list[int]],
+    target_lecture_id: int,
+    lecture_subset: list[int],
+    num_search_workers: int,
+) -> tuple[int | None, str]:
+    model = cp_model.CpModel()
+    lecture_subset_set = set(lecture_subset)
+    hall_assignment: dict[int, cp_model.IntVar] = {}
+
+    for lecture_id in lecture_subset:
+        compatible_halls = compatibility[lecture_id]
+        if not compatible_halls:
+            return None, "INFEASIBLE"
+        hall_assignment[lecture_id] = model.NewIntVarFromDomain(
+            cp_model.Domain.FromValues(compatible_halls),
+            f"pre_a_{lecture_id}",
+        )
+
+    for active_lectures in instance.active_lectures_by_slot.values():
+        scoped_active_lectures = [lecture_id for lecture_id in active_lectures if lecture_id in lecture_subset_set]
+        if len(scoped_active_lectures) > 1:
+            model.AddAllDifferent([hall_assignment[lecture_id] for lecture_id in scoped_active_lectures])
+
+    hall_capacity_by_id = {hall.hall_id: hall.capacity for hall in instance.halls}
+    compatible_capacities = [
+        hall_capacity_by_id[hall_id] for hall_id in compatibility[target_lecture_id]
+    ]
+    target_capacity = model.NewIntVar(
+        min(compatible_capacities),
+        max(compatible_capacities),
+        f"pre_cap_{target_lecture_id}",
+    )
+    model.AddAllowedAssignments(
+        [hall_assignment[target_lecture_id], target_capacity],
+        [
+            (hall_id, hall_capacity_by_id[hall_id])
+            for hall_id in compatibility[target_lecture_id]
+        ],
+    )
+    model.Maximize(target_capacity)
+
+    solver = cp_model.CpSolver()
+    solver.parameters.num_search_workers = num_search_workers
+    solver.parameters.random_seed = instance.seed
+    solver.parameters.log_search_progress = False
+    solver.parameters.catch_sigint_signal = False
+    status = solver.Solve(model)
+    status_name = status_name_from_cp_sat(status)
+    if status == cp_model.INFEASIBLE:
+        return None, status_name
+
+    upper_capacity = max(compatible_capacities)
+    best_bound = safe_float(solver.BestObjectiveBound())
+    if best_bound is not None:
+        upper_capacity = min(upper_capacity, math.floor(best_bound + 1e-9))
+
+    incumbent_capacity = safe_float(solver.ObjectiveValue())
+    if incumbent_capacity is not None:
+        upper_capacity = max(upper_capacity, int(round(incumbent_capacity)))
+
+    upper_capacity = max(upper_capacity, min(compatible_capacities))
+    return upper_capacity, status_name
+
+
+def apply_compatibility_preprocessing(
+    instance: Instance,
+    mode: str,
+) -> tuple[Instance, bool]:
+    compatibility_entries_before = sum(len(hall_ids) for hall_ids in instance.compatibility.values())
+    thread_limit = gurobi_thread_limit()
+    if mode == "none":
+        return (
+            replace(
+                instance,
+                compatibility_preprocess_mode="none",
+                compatibility_entries_before=compatibility_entries_before,
+                compatibility_entries_after=compatibility_entries_before,
+                compatibility_preprocess_subproblems=0,
+                compatibility_preprocess_wall_seconds=0.0,
+                compatibility_preprocess_tightened_lectures=0,
+                compatibility_preprocess_optimal_subproblems=0,
+                compatibility_preprocess_nonoptimal_subproblems=0,
+            ),
+            False,
+        )
+
+    overlap_neighbors = build_overlap_neighbors(instance)
+    compatibility = {
+        lecture_id: list(hall_ids)
+        for lecture_id, hall_ids in instance.compatibility.items()
+    }
+    hall_capacity_by_id = {hall.hall_id: hall.capacity for hall in instance.halls}
+    lecture_ids_all = [lecture.lecture_id for lecture in instance.lectures]
+    reduced_compatibility: dict[int, list[int]] = {}
+    infeasible = False
+    wall_start = time.perf_counter()
+    tightened_lectures = 0
+    optimal_subproblems = 0
+    nonoptimal_subproblems = 0
+
+    for lecture in instance.lectures:
+        lecture_id = lecture.lecture_id
+        if mode == "full":
+            lecture_subset = lecture_ids_all
+        else:
+            lecture_subset = sorted({lecture_id, *overlap_neighbors[lecture_id]})
+
+        upper_capacity, status_name = cp_sat_capacity_upper_bound(
+            instance=instance,
+            compatibility=compatibility,
+            target_lecture_id=lecture_id,
+            lecture_subset=lecture_subset,
+            num_search_workers=thread_limit,
+        )
+        if status_name == "OPTIMAL":
+            optimal_subproblems += 1
+        else:
+            nonoptimal_subproblems += 1
+        if upper_capacity is None:
+            reduced_compatibility[lecture_id] = []
+            infeasible = True
+            continue
+
+        max_capacity_before = max(hall_capacity_by_id[hall_id] for hall_id in compatibility[lecture_id])
+        if upper_capacity < max_capacity_before:
+            tightened_lectures += 1
+        reduced_compatibility[lecture_id] = [
+            hall_id
+            for hall_id in compatibility[lecture_id]
+            if hall_capacity_by_id[hall_id] <= upper_capacity
+        ]
+        if not reduced_compatibility[lecture_id]:
+            infeasible = True
+
+    compatibility_entries_after = sum(len(hall_ids) for hall_ids in reduced_compatibility.values())
+    return (
+        replace(
+            instance,
+            compatibility=reduced_compatibility,
+            compatibility_preprocess_mode=mode,
+            compatibility_entries_before=compatibility_entries_before,
+            compatibility_entries_after=compatibility_entries_after,
+            compatibility_preprocess_subproblems=len(instance.lectures),
+            compatibility_preprocess_wall_seconds=time.perf_counter() - wall_start,
+            compatibility_preprocess_tightened_lectures=tightened_lectures,
+            compatibility_preprocess_optimal_subproblems=optimal_subproblems,
+            compatibility_preprocess_nonoptimal_subproblems=nonoptimal_subproblems,
+        ),
+        infeasible,
     )
 
 
@@ -1003,6 +1243,17 @@ def status_name_from_gurobi(status_code: int) -> str:
         GRB.NUMERIC: "NUMERIC",
         GRB.SUBOPTIMAL: "SUBOPTIMAL",
         GRB.USER_OBJ_LIMIT: "USER_OBJ_LIMIT",
+    }
+    return mapping.get(status_code, f"STATUS_{status_code}")
+
+
+def status_name_from_cp_sat(status_code: int) -> str:
+    mapping = {
+        cp_model.OPTIMAL: "OPTIMAL",
+        cp_model.FEASIBLE: "FEASIBLE",
+        cp_model.INFEASIBLE: "INFEASIBLE",
+        cp_model.MODEL_INVALID: "MODEL_INVALID",
+        cp_model.UNKNOWN: "UNKNOWN",
     }
     return mapping.get(status_code, f"STATUS_{status_code}")
 
@@ -1479,6 +1730,7 @@ def solve_gurobi_linearized_root(
 def solve_cp_sat(instance: Instance, time_limit: float, verbose: bool = True) -> dict[str, Any]:
     wall_start = time.perf_counter()
     model = cp_model.CpModel()
+    thread_limit = gurobi_thread_limit()
 
     hall_assignment: dict[int, cp_model.IntVar] = {}
     for lecture in instance.lectures:
@@ -1521,21 +1773,14 @@ def solve_cp_sat(instance: Instance, time_limit: float, verbose: bool = True) ->
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = time_limit
+    solver.parameters.num_search_workers = thread_limit
+    solver.parameters.random_seed = instance.seed
     solver.parameters.log_search_progress = verbose
     solver.parameters.catch_sigint_signal = False
     status = solver.Solve(model)
     wall_seconds = time.perf_counter() - wall_start
 
-    if status == cp_model.OPTIMAL:
-        status_name = "OPTIMAL"
-    elif status == cp_model.FEASIBLE:
-        status_name = "FEASIBLE"
-    elif status == cp_model.INFEASIBLE:
-        status_name = "INFEASIBLE"
-    elif status == cp_model.MODEL_INVALID:
-        status_name = "MODEL_INVALID"
-    else:
-        status_name = "UNKNOWN"
+    status_name = status_name_from_cp_sat(status)
 
     objective_value = None
     lower_bound = safe_float(solver.BestObjectiveBound())
@@ -1556,10 +1801,46 @@ def solve_cp_sat(instance: Instance, time_limit: float, verbose: bool = True) ->
         "wall_clock_seconds": wall_seconds,
         "solver_runtime_seconds": safe_float(solver.WallTime()),
         "mip_gap": None,
-        "threads": None,
+        "threads": thread_limit,
         "error": None,
         "solution": assignment_details_from_map(instance, assignment_by_lecture),
     }
+
+
+def preprocessing_infeasible_results(selected_model: str | None, reason: str) -> list[dict[str, Any]]:
+    thread_limit = gurobi_thread_limit()
+    if selected_model is None:
+        model_specs = [
+            ("GUROBI", "quadratic_miqp"),
+            ("GUROBI", "linearized_milp"),
+            ("OR_TOOLS", "cp_sat"),
+        ]
+    elif selected_model == "MIPQ":
+        model_specs = [("GUROBI", "quadratic_miqp")]
+    elif selected_model == "MIP":
+        model_specs = [("GUROBI", "linearized_milp")]
+    elif selected_model == "CP":
+        model_specs = [("OR_TOOLS", "cp_sat")]
+    else:
+        model_specs = [("GUROBI", "linearized_root")]
+
+    return [
+        {
+            "solver_family": solver_family,
+            "formulation": formulation,
+            "status": "INFEASIBLE",
+            "objective_value": None,
+            "lower_bound": None,
+            "wall_clock_seconds": 0.0,
+            "solver_runtime_seconds": None,
+            "mip_gap": None,
+            "threads": thread_limit,
+            "cuts_mode": None,
+            "error": reason,
+            "solution": None,
+        }
+        for solver_family, formulation in model_specs
+    ]
 
 
 def build_summary_rows(
@@ -1589,6 +1870,15 @@ def build_summary_rows(
     except Exception:
         script_name = "unknown"
         script_last_modified = "unknown"
+
+    compatibility_entries_removed = (
+        instance.compatibility_entries_before - instance.compatibility_entries_after
+    )
+    compatibility_reduction_ratio = (
+        compatibility_entries_removed / instance.compatibility_entries_before
+        if instance.compatibility_entries_before
+        else 0.0
+    )
 
     valid_lower_bounds = [
         float(result["lower_bound"])
@@ -1647,6 +1937,16 @@ def build_summary_rows(
                 "candidate_successor_pairs": candidate_successors,
                 "successor_pairs_with_common_students": len(instance.common_students),
                 "decomposition_connected_components": decomposition_connected_components,
+                "compatibility_preprocess_mode": instance.compatibility_preprocess_mode,
+                "compatibility_entries_before": instance.compatibility_entries_before,
+                "compatibility_entries_after": instance.compatibility_entries_after,
+                "compatibility_entries_removed": compatibility_entries_removed,
+                "compatibility_reduction_ratio": compatibility_reduction_ratio,
+                "compatibility_preprocess_subproblems": instance.compatibility_preprocess_subproblems,
+                "compatibility_preprocess_wall_seconds": instance.compatibility_preprocess_wall_seconds,
+                "compatibility_preprocess_tightened_lectures": instance.compatibility_preprocess_tightened_lectures,
+                "compatibility_preprocess_optimal_subproblems": instance.compatibility_preprocess_optimal_subproblems,
+                "compatibility_preprocess_nonoptimal_subproblems": instance.compatibility_preprocess_nonoptimal_subproblems,
                 "avg_common_students": (
                     sum(common_values) / len(common_values) if common_values else 0.0
                 ),
@@ -1754,6 +2054,19 @@ def instance_to_json_dict(instance: Instance) -> dict[str, Any]:
         "days_per_week": instance.days_per_week,
         "density_target": instance.density_target,
         "density_actual": instance.density_actual,
+        "compatibility_preprocessing": {
+            "mode": instance.compatibility_preprocess_mode,
+            "entries_before": instance.compatibility_entries_before,
+            "entries_after": instance.compatibility_entries_after,
+            "entries_removed": (
+                instance.compatibility_entries_before - instance.compatibility_entries_after
+            ),
+            "subproblems_solved": instance.compatibility_preprocess_subproblems,
+            "wall_clock_seconds": instance.compatibility_preprocess_wall_seconds,
+            "tightened_lectures": instance.compatibility_preprocess_tightened_lectures,
+            "optimal_subproblems": instance.compatibility_preprocess_optimal_subproblems,
+            "nonoptimal_subproblems": instance.compatibility_preprocess_nonoptimal_subproblems,
+        },
         "halls": [
             {
                 "hall_id": hall.hall_id,
@@ -1816,6 +2129,7 @@ def build_json_payload(
             "python_version": sys.version,
             "time_limit_seconds": time_limit,
             "linearized_cuts": cuts_mode,
+            "compatibility_preprocess_mode": instance.compatibility_preprocess_mode,
         },
         "instance": instance_to_json_dict(instance),
         "results_summary": summary_rows,
@@ -1835,6 +2149,7 @@ def build_instance_json_payload(
             "platform": platform.platform(),
             "python_version": sys.version.split()[0],
             "command_line": sys.argv,
+            "compatibility_preprocess_mode": instance.compatibility_preprocess_mode,
         },
         "instance": instance_to_json_dict(instance),
     }
@@ -1919,6 +2234,22 @@ def print_instance_console_view(instance: Instance, json_path: Path) -> None:
         f"total common students={total_common_students}, "
         f"min compatible halls per lecture={min_compatibility}, max distance={max_distance}"
     )
+    if instance.compatibility_preprocess_mode != "none":
+        removed_entries = instance.compatibility_entries_before - instance.compatibility_entries_after
+        print(
+            "Preprocess: "
+            f"mode={instance.compatibility_preprocess_mode}, "
+            f"compatibility entries {instance.compatibility_entries_before} -> "
+            f"{instance.compatibility_entries_after} (-{removed_entries}), "
+            f"subproblems={instance.compatibility_preprocess_subproblems}, "
+            f"tightened lectures={instance.compatibility_preprocess_tightened_lectures}, "
+            f"optimal/nonoptimal="
+            f"{instance.compatibility_preprocess_optimal_subproblems}/"
+            f"{instance.compatibility_preprocess_nonoptimal_subproblems}, "
+            f"wall={instance.compatibility_preprocess_wall_seconds:.3f}s"
+        )
+    if any(len(hall_ids) == 0 for hall_ids in instance.compatibility.values()):
+        print("Feasibility: preprocessing detected infeasibility because some lecture has no compatible hall left.")
     print(f"JSON written to: {json_path}")
     print("")
 
@@ -2049,6 +2380,10 @@ def main() -> None:
             seed=seed,
             density=args.density,
         )
+        instance, preprocessing_infeasible = apply_compatibility_preprocessing(
+            instance,
+            mode=args.compatibility_preprocess,
+        )
 
         if args.instance_only:
             generated_at = dt.datetime.now().astimezone()
@@ -2060,7 +2395,15 @@ def main() -> None:
             print_instance_console_view(instance, json_path)
             continue
 
-        if args.model is None:
+        if preprocessing_infeasible:
+            results = preprocessing_infeasible_results(
+                args.model,
+                reason=(
+                    "Compatibility preprocessing proved that no feasible hall assignment "
+                    "exists under the hard assignment and overlap constraints."
+                ),
+            )
+        elif args.model is None:
             results = [
                 solve_gurobi_quadratic(instance, args.time_limit, verbose=not args.quiet),
                 solve_gurobi_linearized(

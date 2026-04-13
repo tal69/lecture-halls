@@ -52,6 +52,7 @@ Students:
 - and only very rarely take lectures from other topics.
 
 Lecture sizes are not sampled directly. They are the realized attendance counts produced by the cohort-based day-schedule simulation.
+After the student-journey simulation, each lecture size is tightened toward the capacity of its hidden feasible hall so that the room-capacity constraints remain globally feasible but materially more restrictive.
 
 ## Usage
 
@@ -71,6 +72,7 @@ python lecture_hall_experiment.py \
     --time-limit 120 \
     --seed 1-10 \
     --cuts 1 \
+    --compatibility-preprocess full \
     --save-json
 ```
 
@@ -103,6 +105,11 @@ python lecture_hall_experiment.py \
   - `CP`: OR-Tools CP-SAT formulation.
   - `ROOT`: root-node bound of the linearized GUROBI formulation.
   - If omitted, the script solves `MIPQ`, `MIP`, and `CP`.
+- `--compatibility-preprocess {none,full,light}`: optional CP-SAT preprocessing that shrinks the compatible set `H(l)` before any solver is built.
+  - `none`: disable preprocessing.
+  - `full`: for each lecture `l'`, solve the hard-feasibility assignment model on all lectures while maximizing the capacity assigned to `l'`, then remove from `H(l')` every hall whose capacity is larger than the resulting maximum.
+  - `light`: same idea, but solve the subproblem only on `l'` and lectures that overlap `l'`.
+  - The `light` mode is safe but weaker: it may leave extra halls in `H(l')`, yet it cannot remove a hall that is needed by a globally feasible solution.
 - `--instance-only`: generate the instance only, print the input in a user-friendly terminal format, and write JSON export(s). No solver is run and no Excel workbook is written.
 - `--output`: Excel output path. Default: `results.xlsx`.
 - `-s`, `--save-json`: also write a JSON file with the full instance and all solutions.
@@ -121,6 +128,21 @@ Implementation note:
 
 It does **not** use the older four-index linearization with variables `y_(l1,l2,h1,h2)`.
 
+## Compatibility Preprocessing
+
+The optional compatibility preprocessor uses OR-Tools CP-SAT on the hard constraints only:
+- each lecture must be assigned to exactly one currently compatible hall;
+- overlapping lectures cannot use the same hall;
+- the walking objective is ignored.
+
+For a target lecture `l'`, the preprocessing objective is to maximize the capacity of the hall assigned to `l'`. Any hall in `H(l')` whose capacity is strictly larger than that maximum can be removed safely before solving `MIPQ`, `MIP`, `CP`, or `ROOT`.
+
+The implementation provides two scopes:
+- `full`: solve the subproblem on all lectures.
+- `light`: solve it only on `l'` and lectures that overlap `l'`.
+
+If preprocessing empties some `H(l)`, the script declares the instance infeasible before calling the main solvers.
+
 ## Outputs
 
 ### Excel workbook
@@ -130,6 +152,7 @@ The Excel file contains a single `summary` sheet. Repeated runs append new rows 
 - seed and instance demographics,
 - density and size statistics,
 - realized successor-set statistics,
+- compatibility-preprocessing statistics,
 - solver status,
 - objective value,
 - lower bound,
@@ -142,6 +165,7 @@ The Excel file contains a single `summary` sheet. Repeated runs append new rows 
 
 If `--save-json` is enabled, the script also writes a timestamped JSON file that contains:
 - the full generated instance,
+- compatibility-preprocessing metadata,
 - detailed lecture and hall data,
 - realized successor pairs and common-student counts,
 - solver summaries,

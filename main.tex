@@ -87,14 +87,38 @@ The interval structure also yields a tighter way to express temporal feasibility
 \end{equation}
 This replacement is exact. For every time unit $t$, the set $L(t)$ of lectures active at time $t$ forms a clique in the interval graph, and therefore is contained in a maximal clique. Conversely, by the Helly property of intervals, every clique of an interval graph has a common intersection point, so each maximal clique corresponds to a set of lectures that are simultaneously active at some time. Hence \eqref{eq:clique-overlap} is equivalent to the family of slot-indexed non-overlap constraints, but it is often smaller because many consecutive time units induce identical or nested active sets. The same observation applies to the MILP and CP formulations below: one may replace the time-indexed overlap constraints, or the corresponding \texttt{AllDifferent} constraints, by maximal-clique constraints of the interval graph.
 
+A useful preprocessing step can shrink the compatibility sets $H(l)$ before solving any of the three formulations below. Fix a target lecture $l' \in L$ and consider the auxiliary problem
+\begin{align*}
+    U_{l'} = \max \quad & \sum_{h \in H(l')} u_h x_{l'h} \\
+    \text{s.t.} \quad
+    & \sum_{h \in H(l)} x_{lh} = 1, && \forall l \in L, \nonumber\\
+    & \sum_{l \in L(t)} x_{lh} \le 1, && \forall t \in T,\ \forall h \in H, \nonumber\\
+    & x_{lh} \in \{0,1\}, && \forall l \in L,\ \forall h \in H(l). \nonumber
+\end{align*}
+This model keeps only the hard feasibility constraints and maximizes the capacity assigned to the single lecture $l'$. If $U_{l'}$ denotes its optimal value, then every hall $h \in H(l')$ with $u_h > U_{l'}$ may be removed from $H(l')$.
+
+Indeed, suppose that some globally feasible assignment uses lecture $l'$ in a hall $\hat h$ with $u_{\hat h} > U_{l'}$. That same assignment satisfies the preprocessing constraints above and attains objective value at least $u_{\hat h}$, contradicting the definition of $U_{l'}$. Therefore the reduced set
+\[
+\widehat H(l') = \{h \in H(l') : u_h \le U_{l'}\}
+\]
+preserves all feasible solutions of the original problem. Repeating this optimization for each lecture yields a valid preprocessing step for the MIQP, the compact MILP, and the CP model alike.
+
+One may also use a cheaper lightweight version. Let
+\[
+L'(l') = \{l'\} \cup \{l \in L : \text{$l$ overlaps $l'$ in time}\},
+\]
+and solve the same maximization problem with $L'(l')$ replacing $L$ and with the overlap constraints restricted accordingly. Let its optimal value be $\widetilde U_{l'}$. Since the lightweight problem removes lectures and therefore relaxes the feasible region, one has
+\[
+\widetilde U_{l'} \ge U_{l'}.
+\]
+Consequently, deleting from $H(l')$ only the halls with capacity larger than $\widetilde U_{l'}$ is still safe: it may leave more halls than the full preprocessing, but it cannot remove a hall that is needed by a globally feasible solution.
+
 A compact linearization can be obtained by introducing, for each successor pair $(l_1,l_2) \in A$ such that $c_{l_1,l_2} > 0$, one nonnegative continuous variable $z_{l_1 l_2}$ representing the realized hall-to-hall distance induced by that pair. The problem can then be reformulated as the mixed-integer linear program
 \begin{align}
     \min \quad & \sum_{(l_1,l_2) \in A'} c_{l_1,l_2} z_{l_1 l_2} \label{eq:milp-obj} \\
-    \text{s.t.} \quad
-    & \sum_{h \in H(l)} x_{lh} = 1, && \forall l \in L, \label{eq:milp-assign} \\
-    & \sum_{l \in L(t)} x_{lh} \le 1, && \forall t \in T,\ \forall h \in H, \label{eq:milp-overlap} \\
-    & z_{l_1 l_2} \ge d_{h_1,h_2}\bigl(x_{l_1 h_1} + x_{l_2 h_2} - 1\bigr), && \forall (l_1,l_2) \in A',  h_1 \in H(l_1), h_2 \in H(l_2), \label{eq:milp-link3} \\
-    & x_{lh} \in \{0,1\}, && \forall l \in L,\ \forall h \in H(l), \label{eq:milp-x-binary} \\
+    \text{s.t.}  \quad &   \text{Constraints \eqref{eq:nlp-assign} and \eqref{eq:nlp-overlap}} \nonumber\\
+   & z_{l_1 l_2} \ge d_{h_1,h_2}\bigl(x_{l_1 h_1} + x_{l_2 h_2} - 1\bigr), && \forall (l_1,l_2) \in A',  h_1 \in H(l_1), h_2 \in H(l_2), \label{eq:milp-link3} \\
+   & x_{lh} \in \{0,1\}, && \forall l \in L,\ \forall h \in H(l), \label{eq:milp-x-binary} \\
     & z_{l_1 l_2} \ge 0, && \forall (l_1,l_2) \in A'. \label{eq:milp-z-nonneg}
 \end{align}
 This reformulation is exact. Since each lecture is assigned to exactly one hall, for every pair $(l_1,l_2)$ there is exactly one compatible hall pair $(h_1,h_2)$ for which $x_{l_1 h_1}=x_{l_2 h_2}=1$; for that pair, constraint~\eqref{eq:milp-link3} yields
