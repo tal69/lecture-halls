@@ -1,6 +1,8 @@
 # Quadratic Lecture Hall Assignment
 
-This repository contains a simulation and optimization tool for the lecture hall quadratic assignment problem. The script generates a **single-day** lecture-to-hall assignment instance and solves it with alternative exact formulations while minimizing the walking burden induced by consecutive lectures that share students.
+This repository contains a simulation and optimization tool for the lecture hall quadratic assignment problem. The script generates a **single-day** lecture-to-hall assignment instance and solves it with alternative exact formulations while minimizing:
+- the walking burden induced by consecutive lectures that share students, and
+- a linear assignment penalty for excessive wasted space in the chosen hall.
 
 The current workflow includes:
 - a random single-day instance generator,
@@ -38,6 +40,8 @@ Lectures:
 - are distributed across halls to match the requested density,
 - are assigned balanced `subject` and `study_year` labels,
 - are classified as roughly `70%` compulsory and `30%` elective,
+- are first assigned by a randomized greedy balancing heuristic,
+- and, if that heuristic fails on a dense instance, are completed by an exact CP-SAT fallback that preserves the balanced subject/year totals and enforces the cohort-overlap rule,
 - satisfy the timetable rule that for any fixed `(subject, year)` cohort and time slot there is either:
   - at most one compulsory lecture, or
   - at most two elective lectures,
@@ -53,6 +57,33 @@ Students:
 
 Lecture sizes are not sampled directly. They are the realized attendance counts produced by the cohort-based day-schedule simulation.
 After the student-journey simulation, each lecture size is tightened toward the capacity of its hidden feasible hall so that the room-capacity constraints remain globally feasible but materially more restrictive.
+
+## Assignment Penalty
+
+The objective now includes a per-assignment penalty that discourages placing a lecture in a hall that is much larger than needed.
+
+For a lecture with `students = s` assigned to a hall with `capacity = u`:
+- the penalty is `0` as long as at least `90%` of the hall is filled, equivalently while `s >= ceil(0.9 * u)`;
+- otherwise the penalty is quadratic in the excess empty seats beyond that threshold:
+
+```text
+penalty(s, u) = max(0, ceil(0.9 * u) - s)^2
+```
+
+Examples for a hall of capacity `100`:
+- class size `90` to `100`: penalty `0`
+- class size `89`: penalty `1`
+- class size `80`: penalty `100`
+
+This penalty is generated automatically for every compatible lecture-hall pair and added to the objective in all solver backends (`MIPQ`, `MIP`, and `CP`).
+
+Determinism note:
+- if the original greedy attribute-assignment path succeeds for a given seed, the generated instance is unchanged by the fallback patch;
+- the new CP-SAT fallback only affects seeds and parameter combinations for which the old generator would previously have failed with a runtime error.
+
+## Complexity
+
+The paper now includes an NP-hardness proof for the lecture-hall assignment problem via a reduction from the classical quadratic assignment problem. The reduction already applies to a restricted single-day case with two consecutive time blocks, identical hall capacities, and full lecture-hall compatibility.
 
 ## Usage
 
@@ -165,11 +196,13 @@ The Excel file contains a single `summary` sheet. Repeated runs append new rows 
 
 If `--save-json` is enabled, the script also writes a timestamped JSON file that contains:
 - the full generated instance,
+- the assignment-penalty rule metadata,
 - compatibility-preprocessing metadata,
 - detailed lecture and hall data,
+- per-lecture compatible-hall penalties,
 - realized successor pairs and common-student counts,
 - solver summaries,
-- and full solution details for any solver that produced an assignment.
+- and full solution details for any solver that produced an assignment, including the walking and assignment-penalty contributions.
 
 If `--instance-only` is used, the script instead writes timestamped instance JSON files containing:
 - generation metadata,

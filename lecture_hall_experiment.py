@@ -44,6 +44,7 @@ SUBJECTS = (
     "Psychology",
 )
 STUDY_YEARS = (1, 2, 3, 4)
+FREE_WASTE_RATIO = 0.10
 
 
 @dataclass(frozen=True)
@@ -84,6 +85,7 @@ class Instance:
     distances: list[list[int]]
     common_students: dict[tuple[int, int], int]
     compatibility: dict[int, list[int]]
+    assignment_penalties: dict[int, dict[int, int]]
     active_lectures_by_slot: dict[int, list[int]]
     compatibility_preprocess_mode: str = "none"
     compatibility_entries_before: int = 0
@@ -367,6 +369,31 @@ def generate_distances(halls: list[Hall]) -> list[list[int]]:
             # scaled Euclidean distances to integers.
             distances[i][j] = int(math.ceil(math.dist((hall_i.x, hall_i.y), (hall_j.x, hall_j.y)) * 10))
     return distances
+
+
+def min_students_without_waste_penalty(hall_capacity: int) -> int:
+    return math.ceil((1.0 - FREE_WASTE_RATIO) * hall_capacity)
+
+
+def wasted_space_penalty(students: int, hall_capacity: int) -> int:
+    penalty_trigger_threshold = min_students_without_waste_penalty(hall_capacity)
+    excess_empty_seats = max(0, penalty_trigger_threshold - students)
+    return excess_empty_seats * excess_empty_seats
+
+
+def build_assignment_penalties(
+    lectures: list[Lecture],
+    halls: list[Hall],
+    compatibility: dict[int, list[int]],
+) -> dict[int, dict[int, int]]:
+    hall_capacity_by_id = {hall.hall_id: hall.capacity for hall in halls}
+    return {
+        lecture.lecture_id: {
+            hall_id: wasted_space_penalty(lecture.students, hall_capacity_by_id[hall_id])
+            for hall_id in compatibility[lecture.lecture_id]
+        }
+        for lecture in lectures
+    }
 
 
 def assign_durations_to_bins(
@@ -1172,6 +1199,7 @@ def build_instance(
         lecture.lecture_id: [hall.hall_id for hall in halls if hall.capacity >= lecture.students]
         for lecture in lectures
     }
+    assignment_penalties = build_assignment_penalties(lectures, halls, compatibility)
     horizon = DAYS_PER_WEEK * slots_per_day
     active_lectures_by_slot = {
         slot: [
@@ -1197,6 +1225,7 @@ def build_instance(
         distances=distances,
         common_students=common_students,
         compatibility=compatibility,
+        assignment_penalties=assignment_penalties,
         active_lectures_by_slot=active_lectures_by_slot,
         compatibility_preprocess_mode="none",
         compatibility_entries_before=compatibility_entries,
@@ -1357,11 +1386,19 @@ def apply_compatibility_preprocessing(
         if not reduced_compatibility[lecture_id]:
             infeasible = True
 
+    reduced_assignment_penalties = {
+        lecture_id: {
+            hall_id: instance.assignment_penalties[lecture_id][hall_id]
+            for hall_id in reduced_compatibility[lecture_id]
+        }
+        for lecture_id in reduced_compatibility
+    }
     compatibility_entries_after = sum(len(hall_ids) for hall_ids in reduced_compatibility.values())
     return (
         replace(
             instance,
             compatibility=reduced_compatibility,
+            assignment_penalties=reduced_assignment_penalties,
             compatibility_preprocess_mode=mode,
             compatibility_entries_before=compatibility_entries_before,
             compatibility_entries_after=compatibility_entries_after,
@@ -1466,12 +1503,20 @@ def assignment_details_from_map(
     hall_map = {hall.hall_id: hall for hall in instance.halls}
     lecture_map = {lecture.lecture_id: lecture for lecture in instance.lectures}
     assignments = []
-    objective_terms = []
-    recomputed_objective = 0
+    walking_objective_terms = []
+    assignment_penalty_terms = []
+    recomputed_walking_objective = 0
+    recomputed_assignment_penalty = 0
 
     for lecture in instance.lectures:
         hall_id = assignment_by_lecture[lecture.lecture_id]
         hall = hall_map[hall_id]
+        unused_seats = hall.capacity - lecture.students
+        min_students_free = min_students_without_waste_penalty(hall.capacity)
+        allowed_empty_seats = hall.capacity - min_students_free
+        excess_empty_seats = max(0, unused_seats - allowed_empty_seats)
+        assignment_penalty = instance.assignment_penalties[lecture.lecture_id][hall_id]
+        recomputed_assignment_penalty += assignment_penalty
         assignments.append(
             {
                 "lecture_id": lecture.lecture_id,
@@ -1486,6 +1531,25 @@ def assignment_details_from_map(
                 "assigned_hall_id": hall_id,
                 "assigned_hall_name": hall.name,
                 "assigned_hall_capacity": hall.capacity,
+                "unused_seats": unused_seats,
+                "allowed_empty_seats_without_penalty": allowed_empty_seats,
+                "excess_empty_seats_penalized": excess_empty_seats,
+                "assignment_penalty": assignment_penalty,
+            }
+        )
+        assignment_penalty_terms.append(
+            {
+                "term_type": "assignment_penalty",
+                "lecture_id": lecture.lecture_id,
+                "lecture_name": lecture.name,
+                "hall_id": hall_id,
+                "hall_name": hall.name,
+                "hall_capacity": hall.capacity,
+                "students": lecture.students,
+                "unused_seats": unused_seats,
+                "allowed_empty_seats_without_penalty": allowed_empty_seats,
+                "excess_empty_seats_penalized": excess_empty_seats,
+                "contribution": assignment_penalty,
             }
         )
 
@@ -1494,9 +1558,10 @@ def assignment_details_from_map(
         hall_id_2 = assignment_by_lecture[lecture_id_2]
         distance = instance.distances[hall_id_1][hall_id_2]
         contribution = common_count * distance
-        recomputed_objective += contribution
-        objective_terms.append(
+        recomputed_walking_objective += contribution
+        walking_objective_terms.append(
             {
+                "term_type": "walking",
                 "from_lecture_id": lecture_id_1,
                 "from_lecture_name": lecture_map[lecture_id_1].name,
                 "to_lecture_id": lecture_id_2,
@@ -1512,8 +1577,12 @@ def assignment_details_from_map(
     return {
         "assignment_by_lecture": assignment_by_lecture,
         "assignments": assignments,
-        "objective_terms": objective_terms,
-        "recomputed_objective": recomputed_objective,
+        "objective_terms": walking_objective_terms + assignment_penalty_terms,
+        "walking_objective_terms": walking_objective_terms,
+        "assignment_penalty_terms": assignment_penalty_terms,
+        "recomputed_walking_objective": recomputed_walking_objective,
+        "recomputed_assignment_penalty": recomputed_assignment_penalty,
+        "recomputed_objective": recomputed_walking_objective + recomputed_assignment_penalty,
     }
 
 
@@ -1685,6 +1754,11 @@ def build_gurobi_linearized_model(
             pair_vars[(lecture_id_1, lecture_id_2)]
             for (lecture_id_1, lecture_id_2) in instance.common_students
         ]
+    objective_terms.extend(
+        instance.assignment_penalties[lecture.lecture_id][hall_id] * x[(lecture.lecture_id, hall_id)]
+        for lecture in instance.lectures
+        for hall_id in instance.compatibility[lecture.lecture_id]
+    )
     model.setObjective(quicksum(objective_terms), GRB.MINIMIZE)
     return model, x, pair_vars, thread_limit
 
@@ -1745,6 +1819,11 @@ def solve_gurobi_quadratic(instance: Instance, time_limit: float, verbose: bool 
                         * x[(lecture_id_1, hall_id_1)]
                         * x[(lecture_id_2, hall_id_2)]
                     )
+        objective_terms.extend(
+            instance.assignment_penalties[lecture.lecture_id][hall_id] * x[(lecture.lecture_id, hall_id)]
+            for lecture in instance.lectures
+            for hall_id in instance.compatibility[lecture.lecture_id]
+        )
         model.setObjective(quicksum(objective_terms), GRB.MINIMIZE)
         model.optimize()
 
@@ -1943,6 +2022,22 @@ def solve_cp_sat(instance: Instance, time_limit: float, verbose: bool = True) ->
             model.AddAllDifferent([hall_assignment[lecture_id] for lecture_id in active_lectures])
 
     objective_terms: list[Any] = []
+    for lecture in instance.lectures:
+        compatible_penalties = instance.assignment_penalties[lecture.lecture_id]
+        feasible_penalties = sorted(set(compatible_penalties.values()))
+        penalty_var = model.NewIntVar(
+            feasible_penalties[0],
+            feasible_penalties[-1],
+            f"p_{lecture.lecture_id}",
+        )
+        model.AddAllowedAssignments(
+            [hall_assignment[lecture.lecture_id], penalty_var],
+            [
+                (hall_id, compatible_penalties[hall_id])
+                for hall_id in instance.compatibility[lecture.lecture_id]
+            ],
+        )
+        objective_terms.append(penalty_var)
     for (lecture_id_1, lecture_id_2), common_count in instance.common_students.items():
         feasible_distances = sorted(
             {
@@ -2053,6 +2148,11 @@ def build_summary_rows(
     sizes = [lecture.students for lecture in instance.lectures]
     capacities = [hall.capacity for hall in instance.halls]
     common_values = list(instance.common_students.values())
+    assignment_penalty_values = [
+        penalty
+        for hall_penalties in instance.assignment_penalties.values()
+        for penalty in hall_penalties.values()
+    ]
     decomposition_connected_components = count_decomposition_connected_components(instance)
     candidate_successors = sum(
         1
@@ -2119,6 +2219,7 @@ def build_summary_rows(
                 "time_horizon_slots": instance.days_per_week * instance.slots_per_day,
                 "density_target": instance.density_target,
                 "density_actual": instance.density_actual,
+                "free_waste_ratio": FREE_WASTE_RATIO,
                 "time_limit_seconds": time_limit,
                 "linearized_cuts": cuts_mode,
                 "num_lectures": len(instance.lectures),
@@ -2149,6 +2250,10 @@ def build_summary_rows(
                     sum(common_values) / len(common_values) if common_values else 0.0
                 ),
                 "total_common_students_weight": sum(common_values),
+                "max_assignment_penalty": max(assignment_penalty_values) if assignment_penalty_values else 0,
+                "positive_assignment_penalty_entries": sum(
+                    1 for penalty in assignment_penalty_values if penalty > 0
+                ),
                 "solver_family": result["solver_family"],
                 "formulation": result["formulation"],
                 "status": result["status"],
@@ -2252,6 +2357,10 @@ def instance_to_json_dict(instance: Instance) -> dict[str, Any]:
         "days_per_week": instance.days_per_week,
         "density_target": instance.density_target,
         "density_actual": instance.density_actual,
+        "assignment_penalty": {
+            "type": "quadratic_wasted_space",
+            "free_waste_ratio": FREE_WASTE_RATIO,
+        },
         "compatibility_preprocessing": {
             "mode": instance.compatibility_preprocess_mode,
             "entries_before": instance.compatibility_entries_before,
@@ -2289,6 +2398,13 @@ def instance_to_json_dict(instance: Instance) -> dict[str, Any]:
                 "end_slot": lecture.end_slot,
                 "students": lecture.students,
                 "compatible_halls": instance.compatibility[lecture.lecture_id],
+                "compatible_hall_penalties": [
+                    {
+                        "hall_id": hall_id,
+                        "penalty": instance.assignment_penalties[lecture.lecture_id][hall_id],
+                    }
+                    for hall_id in instance.compatibility[lecture.lecture_id]
+                ],
             }
             for lecture in instance.lectures
         ],
@@ -2416,6 +2532,14 @@ def print_instance_console_view(instance: Instance, json_path: Path) -> None:
     )
     min_compatibility = min(len(halls) for halls in instance.compatibility.values()) if instance.compatibility else 0
     max_distance = max(max(row) for row in instance.distances) if instance.distances else 0
+    max_assignment_penalty = max(
+        (
+            penalty
+            for hall_penalties in instance.assignment_penalties.values()
+            for penalty in hall_penalties.values()
+        ),
+        default=0,
+    )
 
     print("=" * 88)
     print(f"Generated instance input | seed={instance.seed}")
@@ -2430,7 +2554,13 @@ def print_instance_console_view(instance: Instance, json_path: Path) -> None:
         "Structure: "
         f"successor pairs={len(instance.common_students)}/{candidate_successors}, "
         f"total common students={total_common_students}, "
-        f"min compatible halls per lecture={min_compatibility}, max distance={max_distance}"
+        f"min compatible halls per lecture={min_compatibility}, max distance={max_distance}, "
+        f"max assignment penalty={max_assignment_penalty}"
+    )
+    print(
+        "Penalty: "
+        f"wasted space is free up to {FREE_WASTE_RATIO:.0%} of hall capacity; "
+        "beyond that, the excess empty seats are penalized quadratically."
     )
     if instance.compatibility_preprocess_mode != "none":
         removed_entries = instance.compatibility_entries_before - instance.compatibility_entries_after
