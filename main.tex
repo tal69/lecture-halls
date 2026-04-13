@@ -3,10 +3,13 @@
 \usepackage[margin=1in]{geometry}
 
 % Core packages
-\usepackage{amsmath,amssymb}
+\usepackage{amsmath,amssymb,amsthm}
 \usepackage{tikz-cd}
 \usepackage{multicol}
 \usepackage[round,authoryear]{natbib}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{proposition}[theorem]{Proposition}
 
 % Paragraphs
 \setlength{\parindent}{0pt}
@@ -19,106 +22,128 @@
 \begin{document}
 \maketitle
 
-\section{Introduction}
+\section{Introduction and background}
 Universities and colleages often determine the courses timetable well before they assign lectures to specific halls. Once the timetable is fixed and student registration is completed, the institution knows both the size of each lecture and, to some extent, the overlap in enrollment between consecutive lectures. At that stage, the hall-assignment decision can have a substantial effect on student mobility across campus. Assigning consecutive lectures attended by many of the same students to distant halls may generate unnecessary walking, even when every lecture is assigned to a feasible room. In practice, long walks between halls may also cause students to arrive late at their next class, thereby disrupting the beginning of lecture.  It may also be particularlly challanging to students with mobility disablities.
 
 This observation motivates a lecture-hall assignment problem that is separate from the timetabling itself. In the lecture-hall assignment problem, the timetable, including the scheduled time interval of each lecture, is  given. The remaining task is to assign lectures to halls in a way that respects room capacities and temporal compatibility, while also reducing the walking burden imposed on students as they move between consecutive classes.
-
-We consider this problem through the following sets:
-\begin{description}
-    \item[Halls ($H$)] Each hall is defined by its capacity and location.
-    \item[Lectures ($L$)] Each lecture is defined by its scheduled time interval and its number of students.
-    \item[Immediate-successor relation ($A$)] A relation $A \subseteq L \times L$, where $(l_1,l_2) \in A$ if lecture $l_2$ is scheduled immediately after lecture $l_1$ for at least one group of students.
-    \end{description}   
-
-The walking distance between each pair of halls $h_1, h_2 \in H$ is given by the distance matrix $d_{h_1,h_2}$. In addition, for each pair of lectures $(l_1,l_2) \in A$, we are given the number of students enrolled in both classes, denoted by $c_{l_1,l_2}$.  This mumber may be a simple head count or a score that gives higher weight to students with disabilities, if the instituation has this infomration at its disposle. 
-
-
-The goal is to assign each lecture to a hall with sufficient capacity, such that no two lectures assigned to the same hall overlap in time. The objective is to minimize the total walking distance walked by students between consecutive classes.
-
-This problem shares features with both the quadratic assignment problem and interval scheduling, and in a sense it combines elements of both.
-
-\paragraph{Computational complexity.} A natural decision version of the lecture-hall assignment problem asks whether, for a given bound $B$, there exists a feasible hall assignment whose total walking cost is at most $B$. This decision problem belongs to NP, since a proposed assignment can be verified in polynomial time by checking compatibility, non-overlap, and the resulting objective value. The next proposition shows that the problem is already NP-hard in a highly restricted special case.
-
-\textbf{Proposition.} The decision version of the lecture-hall assignment problem is NP-complete. Consequently, the corresponding optimization problem is NP-hard. This remains true even for a single-day instance with two consecutive time blocks, identical hall capacities, and full lecture--hall compatibility.
-
-\textit{Proof.} We give a polynomial reduction from the classical quadratic assignment problem (QAP), which is NP-hard \citep{koopmans1957,burkard1998,loiola2007}. Consider a QAP instance with facilities $F=\{1,\dots,n\}$, locations $R=\{1,\dots,n\}$, nonnegative flow matrix $(f_{ij})$, nonnegative distance matrix $(d_{ab})$, and threshold $K$. First, replace the distance matrix by
-\[
-\hat d_{aa}=0 \quad \forall a \in R,
-\qquad
-\hat d_{ab}=d_{ab}+1 \quad \forall a \neq b.
-\]
-This yields an equivalent QAP instance: for every permutation $\pi$ of the locations,
-\[
-\sum_{i=1}^n \sum_{j=1}^n f_{ij} \hat d_{\pi(i),\pi(j)}
-=
-\sum_{i=1}^n \sum_{j=1}^n f_{ij} d_{\pi(i),\pi(j)}
-+
-\sum_{i \neq j} f_{ij},
-\]
-because $\pi(i) \neq \pi(j)$ whenever $i \neq j$. Hence the original QAP instance is a yes-instance if and only if the normalized one is a yes-instance for the shifted bound
-\[
-\hat K = K + \sum_{i \neq j} f_{ij}.
-\]
-
-We now construct a lecture-hall assignment instance. Create $n$ halls $h_1,\dots,h_n$, all with the same capacity and all mutually compatible with every lecture. Create $2n$ lectures, split into two time blocks:
-\[
-U=\{u_1,\dots,u_n\}
-\qquad \text{and} \qquad
-V=\{v_1,\dots,v_n\}.
-\]
-All lectures in $U$ occupy the first block and therefore pairwise overlap; all lectures in $V$ occupy the second block and therefore pairwise overlap; and every lecture in $V$ starts immediately after every lecture in $U$ ends. Because the $n$ lectures in each block overlap pairwise and there are exactly $n$ halls, every feasible assignment induces two permutations of the halls: one permutation $\pi$ for the lectures in $U$, and one permutation $\sigma$ for the lectures in $V$.
-
-Set the successor-pair weights as follows. For every $i,j \in \{1,\dots,n\}$, include the pair $(u_i,v_j)$ in the successor set and define
-\[
-c_{u_i,v_j}=
-\begin{cases}
-f_{ij} + M, & \text{if } i=j,\\
-f_{ij}, & \text{if } i \neq j,
-\end{cases}
-\]
-where $M$ is any integer strictly larger than $\hat K$. The hall-to-hall distances are given by the normalized QAP distances:
-\[
-d_{h_a,h_b} = \hat d_{ab} \qquad \forall a,b \in \{1,\dots,n\}.
-\]
-Under a feasible lecture-hall assignment corresponding to permutations $\pi$ and $\sigma$, the objective value is
-\[
-\sum_{i=1}^n \sum_{j=1}^n f_{ij}\hat d_{\pi(i),\sigma(j)}
-+
-M \sum_{i=1}^n \hat d_{\pi(i),\sigma(i)}.
-\]
-
-If $\pi \neq \sigma$, then there exists some $i$ such that $\pi(i) \neq \sigma(i)$. By construction of $\hat d$, this implies $\hat d_{\pi(i),\sigma(i)} \ge 1$, and therefore
-\[
-M \sum_{i=1}^n \hat d_{\pi(i),\sigma(i)} \ge M > \hat K.
-\]
-Since all other terms are nonnegative, any feasible assignment with objective value at most $\hat K$ must satisfy $\pi=\sigma$.
-
-Conversely, if $\pi=\sigma$, then $\hat d_{\pi(i),\sigma(i)}=0$ for every $i$, so the penalty term vanishes and the lecture-hall objective reduces to
-\[
-\sum_{i=1}^n \sum_{j=1}^n f_{ij}\hat d_{\pi(i),\pi(j)},
-\]
-which is exactly the objective of the normalized QAP instance. Therefore the normalized QAP instance admits a permutation of cost at most $\hat K$ if and only if the constructed lecture-hall instance admits a feasible assignment of cost at most $\hat K$.
-
-The construction is polynomial, so the decision version of the lecture-hall assignment problem is NP-hard. Since it also belongs to NP, it is NP-complete. Consequently, the optimization problem is NP-hard. \hfill $\square$
-
-\section{Literature review}
 The proposed model is related to three main streams of literature: the quadratic assignment problem (QAP), classroom assignment and interval scheduling, and university course timetabling. The closest conceptual link to the QAP is the presence of pairwise interaction costs: assigning two lectures to two halls creates a cost that depends jointly on the distance between the halls and on the number of students who attend both lectures. This is analogous to the flow--distance structure that defines the classical QAP introduced by \citet{koopmans1957} and surveyed extensively by \citet{burkard1998} and \citet{loiola2007}. At the same time, the present problem differs from the standard QAP because feasibility is driven by temporal overlap, room capacities, and the subset of lecture pairs that are consecutive on the same day.
 
 A second relevant stream concerns classroom assignment and interval-based room allocation. In this family of problems, activities with fixed or partially fixed time intervals must be assigned to rooms while respecting incompatibilities caused by overlap in time. \citet{carter1992} study the classroom assignment problem from a complexity perspective and explicitly connect it to interval scheduling. Their framework is closely related to the feasibility component of the present model, where lectures cannot share a hall if their time intervals overlap. However, the objective considered here is richer because it is not limited to feasibility or room utilization; instead, it introduces interaction costs across consecutive lectures through student flows and hall-to-hall distances.
 
 A third stream is the university timetabling literature, which studies the joint allocation of courses to times and rooms under institutional constraints. General surveys by \citet{schaerf1999} and \citet{burke2002} describe a broad range of formulations, including problems in which room capacities, conflicts, and soft preferences play a central role, while the more recent review of \citet{abdipoor2023} summarizes modern meta-heuristic and hybrid approaches for university course timetabling. Within this literature, classroom assignment is often treated either as a subproblem of course timetabling or as a second-stage problem after times have been fixed. For example, \citet{torres2014} propose a two-phase approach in which course scheduling is followed by classroom assignment, and \citet{rappos2022} develop a mixed-integer programming model that jointly considers student allocation, room assignment, and time-period assignment. More recently, \citet{davison2025} extend university timetabling models to hybrid teaching environments, showing how current formulations continue to expand in response to operational changes in higher education. This decomposition is natural in many university settings and is also compatible with the present formulation, which assumes that the scheduled time interval of each lecture is already known.
 
-Taken together, these three literatures suggest that the lecture hall assignment problem studied here combines structural ingredients that are usually treated separately. From classroom assignment and interval scheduling it inherits the temporal packing constraints on rooms; from timetabling it inherits the academic context, capacity restrictions, and interpretation of lectures as scheduled activities; and from the QAP it inherits a pairwise objective that couples assignment decisions across lectures. A particularly close recent connection is the room-allocation study in \citep{roomalloc2026}, which explicitly minimizes student relocation between buildings and room changes between consecutive classes while enforcing capacity and overlap constraints. This paper is especially relevant to the present model, whose objective is likewise driven by student movement between consecutive lectures. Overall, the present formulation appears to define a distinct optimization model in which room assignment is driven not only by local feasibility, but also by the downstream effect of assignments on student walking distances between consecutive classes.
+Taken together, these three literatures suggest that the lecture hall assignment problem studied here combines structural ingredients that are usually treated separately. From classroom assignment and interval scheduling it inherits the temporal packing constraints on rooms; from timetabling it inherits the academic context, capacity restrictions, and interpretation of lectures as scheduled activities; and from the QAP it inherits a pairwise objective that couples assignment decisions across lectures. A particularly close recent connection is the room-allocation study of \citet{roomalloc2026}, which also considers a fixed-timetable room-assignment subproblem and explicitly accounts for student movement between consecutive classes. Their model is multiobjective, simultaneously penalizing student relocation between buildings, room-feature mismatches, capacity waste, and room changes, and it is solved primarily by customized multiobjective evolutionary algorithms with local search, benchmarked against a penalized ILP model. The present framework can likewise accommodate mandatory room features through the compatibility sets and additional room-quality criteria through linear assignment penalties. Its distinguishing feature, however, is that student movement enters as a QAP-style quadratic term induced by shared enrollments and inter-hall walking distances, with capacity and overlap kept as hard feasibility constraints inside a single exact optimization model. This distinction yields a different mathematical structure and motivates exact mathematical-programming and constraint-programming approaches rather than a multiobjective metaheuristic framework.
 
-\paragraph{Research gap and contribution.} Although recent work in university timetabling and room allocation accounts for room capacities, time conflicts, and in some cases student-relocation objectives, existing models are typically embedded in broader timetabling frameworks or treated as multiobjective room-allocation problems; see, for example, \citet{rappos2022}, \citet{davison2025}, and \citep{roomalloc2026}. In contrast, the present study focuses on a fixed-time lecture-hall assignment problem in which feasibility is governed by interval-overlap and capacity constraints, while the objective is a QAP-style quadratic function induced by shared enrollments and inter-hall walking distances. To the best of our knowledge, this combination has not been isolated and studied as a standalone optimization problem. This gap motivates the formulation studied here and suggests that the problem may admit structural properties and solution approaches that differ from those developed for general timetabling models. Moreover, in many academic institutions, timetabling is performed separately and long before lecture-hall assignment: the former is carried out before registration begins, whereas the latter can be completed only after registration is finished and the number of students enrolled in each course is known. Therefore, there is practical value in studying this problem in isolation. 
+\paragraph{Research gap and contribution.} Although recent work in university timetabling and room allocation accounts for room capacities, time conflicts, and in some cases student-relocation objectives, these decisions are usually embedded in broader timetabling models or treated as one component of a multiobjective room-allocation problem; see, for example, \citet{rappos2022}, \citet{davison2025}, and \citep{roomalloc2026}. In contrast, we study a fixed-time lecture-hall assignment problem in which the timetable is given and the dominant structural component is a QAP-style quadratic walking term induced by shared enrollments and inter-hall distances. The framework keeps capacity and overlap as hard constraints, and it can also incorporate mandatory room features through the compatibility sets together with additional linear assignment penalties when desired. This setting is natural in institutions where timetabling decisions are made before registration is finalized and actual course enrollments are then observed. Isolating the hall-assignment layer yields a distinct exact optimization problem with exploitable structure. We analyze its computational complexity, derive mathematical programming and constraint programming formulations together with valid inequalities and safe preprocessing techniques, and show in the numerical study that these enhancements substantially improve computational performance relative to the baseline nonlinear formulation while enabling the solution of large and realistic instances to optimality or near-optimality.
 
-\section{Modeling}
+\section{Problem statement and complexity}
+We now formalize the lecture-hall assignment problem and state its complexity properties.
+
+We consider this problem through the following sets:
+\begin{description}
+    \item[Halls ($H$)] Each hall is defined by its capacity and location.
+    \item[Lectures ($L$)] Each lecture is defined by its scheduled time interval and its number of students.
+    \item[Immediate-successor relation ($A$)] A relation $A \subseteq L \times L$, where $(l_1,l_2) \in A$ if lecture $l_2$ is scheduled immediately after lecture $l_1$ for at least one group of students.
+    \end{description}
+
+The walking distance between each pair of halls $h_1, h_2 \in H$ is given by the distance matrix $d_{h_1,h_2}$. In addition, for each pair of lectures $(l_1,l_2) \in A$, we are given the number of students enrolled in both classes, denoted by $c_{l_1,l_2}$. This number may be a simple head count or a score that gives higher weight to students with disabilities, if the institution has this information at its disposal.
+
+The goal is to assign each lecture to a hall with sufficient capacity, such that no two lectures assigned to the same hall overlap in time. The objective is to minimize the total walking distance walked by students between consecutive classes.
+
+This problem shares features with both the quadratic assignment problem and interval scheduling, and in a sense it combines elements of both.
+
+A natural decision version of the lecture-hall assignment problem asks whether, for a given bound $B$, there exists a feasible hall assignment whose total walking cost is at most $B$. This decision problem belongs to NP, since a proposed assignment can be verified in polynomial time by checking compatibility, non-overlap, and the resulting objective value. The next proposition states the exact and approximation hardness of the problem.
+
+\begin{proposition}
+The decision version of the lecture-hall assignment problem is NP-complete, and the corresponding optimization problem is NP-hard. Moreover, for every $\rho \ge 1$, if there exists a polynomial-time $\rho$-approximation algorithm for the lecture-hall assignment problem, then there exists a polynomial-time $\rho$-approximation algorithm for the classical quadratic assignment problem (QAP). Consequently, every approximation lower bound for QAP carries over to the lecture-hall assignment problem. All of these statements remain true even for a restricted single-day case with two consecutive time blocks, identical hall capacities, and full lecture--hall compatibility.
+\end{proposition}
+
+\begin{proof}
+We use a reduction from the classical QAP, which is NP-hard and in approximable with a constant factor, see
+\citet{sahni1976p,burkard1998,loiola2007}. Consider a QAP instance with facilities $F=\{1,\dots,n\}$, locations $R=\{1,\dots,n\}$, nonnegative flow matrix $(f_{ij})$, and nonnegative distance matrix $(d_{ab})$. First normalize the distances by setting
+\[
+\hat d_{aa}=0 \quad \forall a \in R,
+\qquad
+\hat d_{ab}=d_{ab}+1 \quad \forall a \neq b.
+\]
+For every permutation $\pi$ of the locations,
+\[
+\sum_{i=1}^n \sum_{j=1}^n f_{ij}\hat d_{\pi(i),\pi(j)}
+=
+\sum_{i=1}^n \sum_{j=1}^n f_{ij}d_{\pi(i),\pi(j)}
++
+\sum_{i \neq j} f_{ij},
+\]
+because $\pi(i)\neq \pi(j)$ whenever $i\neq j$. Thus the normalization adds the same constant to every feasible QAP solution, so it preserves both exact comparisons and approximation ratios.
+
+Now construct a lecture-hall instance as follows. Create $n$ halls $h_1,\dots,h_n$, all with identical capacity and all compatible with every lecture. Create two sets of lectures,
+\[
+U=\{u_1,\dots,u_n\}
+\qquad \text{and} \qquad
+V=\{v_1,\dots,v_n\},
+\]
+where all lectures in $U$ occupy one common time block and all lectures in $V$ occupy the immediately following common time block. Every lecture in $U$ therefore overlaps every other lecture in $U$, and similarly for $V$. Since there are exactly $n$ halls, every feasible lecture-hall assignment induces two permutations of the halls: one permutation $\pi$ for the lectures in $U$ and one permutation $\sigma$ for the lectures in $V$. For every $i,j \in \{1,\dots,n\}$, include the pair $(u_i,v_j)$ in the successor set and set
+\[
+d_{h_a,h_b}=\hat d_{ab} \qquad \forall a,b \in \{1,\dots,n\}.
+\]
+
+Let $M$ be a positive penalty parameter, to be specified below, and define
+\[
+c_{u_i,v_j}=
+\begin{cases}
+f_{ij}+M, & \text{if } i=j,\\
+f_{ij}, & \text{if } i\neq j.
+\end{cases}
+\]
+Under a feasible lecture-hall assignment corresponding to permutations $(\pi,\sigma)$, the objective value is
+\[
+\sum_{i=1}^n \sum_{j=1}^n f_{ij}\hat d_{\pi(i),\sigma(j)}
++
+M\sum_{i=1}^n \hat d_{\pi(i),\sigma(i)}.
+\]
+If $\pi\neq \sigma$, then there exists some $i$ such that $\pi(i)\neq \sigma(i)$, and therefore $\hat d_{\pi(i),\sigma(i)}\ge 1$. Hence every such assignment has value at least $M$. On the other hand, if $\pi=\sigma$, then the penalty term vanishes and the lecture-hall objective becomes
+\[
+\sum_{i=1}^n \sum_{j=1}^n f_{ij}\hat d_{\pi(i),\pi(j)},
+\]
+which is exactly the normalized QAP objective.
+
+For the exact reduction, start from the QAP decision problem with threshold $K$ and choose
+\[
+M > \hat K := K + \sum_{i\neq j} f_{ij}.
+\]
+Then any lecture-hall solution of value at most $\hat K$ must satisfy $\pi=\sigma$, and once $\pi=\sigma$ its value is exactly the normalized QAP value of the same permutation. Therefore the original QAP instance is a yes-instance if and only if the constructed lecture-hall instance admits a feasible assignment of cost at most $\hat K$. The reduction is polynomial, so the decision version of the lecture-hall assignment problem is NP-hard. Since it belongs to NP, it is NP-complete. Consequently, the optimization problem is NP-hard.
+
+For the approximation statement, fix $\rho \ge 1$ and let
+\[
+F_{\mathrm{tot}}=\sum_{i=1}^n \sum_{j=1}^n f_{ij},
+\qquad
+D_{\max}=\max_{a,b\in R}\hat d_{ab},
+\qquad
+U_{\max}=F_{\mathrm{tot}}D_{\max}.
+\]
+Every feasible normalized QAP solution has value at most $U_{\max}$, and therefore the optimal value $\mathrm{OPT}_{\mathrm{QAP}}$ satisfies $\mathrm{OPT}_{\mathrm{QAP}}\le U_{\max}$. Now choose
+\[
+M=\rho U_{\max}+1.
+\]
+Then every lecture-hall solution with $\pi\neq \sigma$ has value at least
+\[
+M=\rho U_{\max}+1 > \rho U_{\max}\ge \rho\,\mathrm{OPT}_{\mathrm{QAP}}.
+\]
+But the optimal lecture-hall value is exactly $\mathrm{OPT}_{\mathrm{QAP}}$, attained by solutions with $\pi=\sigma$. Therefore any polynomial-time $\rho$-approximation algorithm for the lecture-hall assignment problem, applied to this constructed instance, must return a solution with $\pi=\sigma$, because every solution with $\pi\neq \sigma$ already exceeds $\rho$ times the optimum. For such a returned solution, the lecture-hall objective is exactly the normalized QAP objective of the same permutation. Hence a polynomial-time $\rho$-approximation for the lecture-hall assignment problem yields a polynomial-time $\rho$-approximation for QAP.
+
+Thus both exact hardness and approximation hardness follow from the same reduction family.
+\end{proof}
+
+
+\section{Models and algorithms}
+This section presents three complementary exact modeling views of the lecture-hall assignment problem. We begin with a natural nonlinear integer programming formulation that exposes the structure of the problem and supports several structural observations and preprocessing ideas. We then derive a compact mixed-integer programming reformulation with strengthening inequalities, and finally present a constraint-programming formulation that captures the assignment structure directly.
+
 For notational convenience, define
 \[
 A' = \{(l_1,l_2) \in A : c_{l_1,l_2} > 0\}.
 \]
 
+\subsection{Nonlinear Integer Programming Formulation}
 A natural nonlinear integer programming formulation is as follows. For each lecture $l \in L$ and each compatible hall $h \in H(l)$, let
 \begin{equation}
     x_{lh} =
@@ -128,9 +153,13 @@ A natural nonlinear integer programming formulation is as follows. For each lect
     \end{cases}
     \label{eq:nlp-x-def}
 \end{equation}
-Let $s_l$ denote the number of students attending lecture $l$, and let $u_h$ denote the capacity of hall $h$. Define $H(l) = \{h \in H : u_h \ge s_l\}$ as the set of halls that are compatible with lecture $l$. In addition, let $T$ be the set of elementary time units in the planning horizon, and for each $t \in T$ let $L(t) \subseteq L$ denote the set of lectures whose scheduled intervals include time unit $t$. The problem can then be written as
+Let $s_l$ denote the number of students attending lecture $l$, and let $u_h$ denote the capacity of hall $h$. Define $H(l) \subseteq H$ as the set of halls that are compatible with lecture $l$. In the basic model studied here, compatibility is determined only by capacity, so
+\[
+H(l) = \{h \in H : u_h \ge s_l\}.
+\]
+In addition, let $T$ be the set of elementary time units in the planning horizon, and for each $t \in T$ let $L(t) \subseteq L$ denote the set of lectures whose scheduled intervals include time unit $t$. The problem can then be written as
 \begin{align}
-    \min \quad & \sum_{(l_1,l_2) \in A'} \sum_{h_1 \in H(l_1)} \sum_{h_2 \in H(l_2)} c_{l_1,l_2} \, d_{h_1,h_2} \, x_{l_1 h_1} x_{l_2 h_2} \label{eq:nlp-obj} \\
+    \min \quad & \sum_{(l_1,l_2) \in A'} c_{l_1,l_2} \, \sum_{h_1 \in H(l_1)} \sum_{h_2 \in H(l_2)}  d_{h_1,h_2} \, x_{l_1 h_1} x_{l_2 h_2} \label{eq:nlp-obj} \\
     \text{s.t.} \quad
     & \sum_{h \in H(l)} x_{lh} = 1, && \forall l \in L, \label{eq:nlp-assign} \\
     & \sum_{l \in L(t)} x_{lh} \le 1, && \forall t \in T,\ \forall h \in H, \label{eq:nlp-overlap} \\
@@ -177,6 +206,7 @@ and solve the same maximization problem with $L'(l')$ replacing $L$ and with the
 \]
 Consequently, deleting from $H(l')$ only the halls with capacity larger than $\widetilde U_{l'}$ is still safe: it may leave more halls than the full preprocessing, but it cannot remove a hall that is needed by a globally feasible solution.
 
+\subsection{Mixed-Integer Programming Reformulation}
 A compact linearization can be obtained by introducing, for each successor pair $(l_1,l_2) \in A$ such that $c_{l_1,l_2} > 0$, one nonnegative continuous variable $z_{l_1 l_2}$ representing the realized hall-to-hall distance induced by that pair. The problem can then be reformulated as the mixed-integer linear program
 \begin{align}
     \min \quad & \sum_{(l_1,l_2) \in A'} c_{l_1,l_2} z_{l_1 l_2} \label{eq:milp-obj} \\
@@ -242,6 +272,7 @@ z_{l_1 l_2} \ge D\left(\frac{1}{p}-1+1\right)=\frac{D}{p}>0,
 \]
 which contradicts $z_{l_1 l_2}=0$. Hence \eqref{eq:milp-link-strong} cuts off an infinite family of fractional solutions that remain feasible under \eqref{eq:milp-link3}.
 
+\subsection{Constraint Programming Formulation}
 A constraint-programming (CP) formulation can be made more compact by replacing the binary assignment variables with one integer decision variable $a_l$ for each lecture $l \in L$, where $a_l$ denotes the hall assigned to lecture $l$ and its domain is restricted to the compatible set $H(l)$. The model can then be written as
 \begin{align}
     \min \quad & \sum_{(l_1,l_2) \in A'} c_{l_1,l_2} \, d_{a_{l_1},a_{l_2}} \label{eq:cpsat-obj} \\
@@ -264,10 +295,59 @@ If one wants a lower-level encoding that is closer to an actual CP-SAT implement
 \end{equation}
 Then the objective in \eqref{eq:cpsat-obj} can be replaced by
 \begin{equation}
-    \min \sum_{(l_1,l_2) \in A} c_{l_1,l_2} \, u_{l_1,l_2},
+    \min \sum_{(l_1,l_2) \in A'} c_{l_1,l_2} \, u_{l_1,l_2},
     \label{eq:cp-z-obj}
 \end{equation}
 and the relation \eqref{eq:cp-z-def} can be encoded in CP-SAT by an element constraint or an allowed-assignment table.
+
+\paragraph{Extensions with Additional Room Criteria.}
+The base model isolates the walking-distance component of the lecture-hall assignment problem. In practical applications, one may wish to account for additional room-quality considerations without changing the main combinatorial structure.
+
+These extensions also clarify the relation between the present model and the room-allocation approach of \citet{roomalloc2026}. Once feature requirements are incorporated into $H(l)$ and additional assignment penalties are allowed, the model moves closer to practical room-allocation formulations of the type studied there. However, the present framework remains distinct: student movement enters through a quadratic shared-enrollment walking term, capacity and overlap remain hard feasibility constraints, and the additional room-quality effects enter as linear assignment penalties within a single exact optimization model rather than as separate objectives in a multiobjective evolutionary framework.
+
+First, hard room-feature requirements can be incorporated directly through the compatibility sets. Let $F_l^{\mathrm{req}}$ denote the set of mandatory features required by lecture $l$ (for example, a laboratory session that must be assigned to a lab room), and let $F_h$ denote the feature set of hall $h$. Then one may redefine
+\[
+H(l) = \{h \in H : u_h \ge s_l,\ F_l^{\mathrm{req}} \subseteq F_h\}.
+\]
+No further change in the formulations is needed: the nonlinear model, the MILP reformulation, and the CP model already enforce assignment only to halls in $H(l)$.
+
+Second, soft penalties can be added for room-feature mismatch and wasted capacity. Since both effects depend only on the assignment of lecture $l$ to hall $h$, they may be combined into a single coefficient $p_{lh} \ge 0$, representing the total linear penalty associated with that assignment. For example, $p_{lh}$ may aggregate penalties for missing desirable room features and for excess unused capacity under a chosen measure. The nonlinear objective \eqref{eq:nlp-obj} can then be extended to
+\begin{align}
+    \min \quad & \sum_{(l_1,l_2) \in A'} c_{l_1,l_2} \, \sum_{h_1 \in H(l_1)} \sum_{h_2 \in H(l_2)} d_{h_1,h_2} \, x_{l_1 h_1} x_{l_2 h_2}
+    + \sum_{l \in L} \sum_{h \in H(l)} p_{lh} x_{lh}. \label{eq:nlp-obj-extended}
+\end{align}
+These additional terms are linear in the assignment variables, so they preserve the quadratic-plus-linear structure of the model. Consequently, the compact MILP reformulation is obtained simply by adding the same linear terms to \eqref{eq:milp-obj}, while keeping all linking constraints and valid inequalities unchanged. Likewise, in the CP model one may add per-lecture assignment costs indexed by the chosen hall. Thus these extensions move the model closer to practical room-allocation settings while preserving the exact-solution framework developed in this paper.
+
+
+\section{Numerical experiments}
+This section will evaluate the computational behavior of the proposed formulations and algorithms and quantify the contribution of each modeling enhancement. The numerical study should be organized to separate formulation strength, preprocessing effects, and solver behavior across instance classes.
+
+\subsection{Experimental goals}
+The numerical study should address four main questions: (i) how much stronger the compact MIP reformulation is than the baseline nonlinear model, (ii) how much the valid inequalities improve the linear relaxation and the branch-and-bound performance, (iii) how effective the preprocessing procedures are in shrinking the compatibility sets and accelerating solution, and (iv) how the MIP and CP approaches compare on instances of increasing size and density.
+
+\subsection{Test instances}
+The experiments should include a synthetic benchmark family generated from controlled parameter ranges. A natural design is to vary the number of halls, the lecture density, and the seed. For example, one may consider several hall sizes (such as 10, 20, 30, 40, and 50 halls), several density levels, and a fixed set of random seeds for each parameter combination. If institutional data become available, a final subsection may report results on one or more realistic instances using the same methodology.
+
+\subsection{Compared formulations and algorithmic variants}
+The comparison should include at least the following variants:
+\begin{enumerate}
+    \item the baseline nonlinear formulation;
+    \item the compact MIP reformulation without strengthening;
+    \item the compact MIP reformulation with valid inequalities;
+    \item the compact MIP reformulation with valid inequalities and preprocessing;
+    \item the CP formulation;
+    \item optionally, the extended model with additional linear assignment penalties.
+\end{enumerate}
+If both lightweight and full preprocessing are retained, they should be tested as separate variants.
+
+\subsection{Performance measures}
+For each run, the numerical study should report the objective value, runtime, optimality gap at the time limit, and a solved-to-optimality indicator. For MIP-based variants, it is also useful to report the root relaxation bound, the number of branch-and-bound nodes, and the reduction in compatibility-set size produced by preprocessing. Aggregate statistics should include means, medians, and success rates over the seed set.
+
+\subsection{Experiment blocks}
+The numerical section can be organized into the following blocks. The first block should compare the baseline nonlinear model against the compact MIP reformulation to isolate the value of linearization. The second block should quantify the marginal benefit of the strengthening inequalities. The third block should evaluate lightweight versus full preprocessing. The fourth block should compare the best MIP variant with the CP formulation. A final block may analyze scalability by plotting runtime and solution quality against instance size and density.
+
+\subsection{Implementation and reproducibility}
+This subsection should document the hardware, solver versions, parameter settings, and time limits used in the experiments. It should also state the random-seed policy and the exact generator settings so that the experiments can be reproduced. If the experiments rely on the current code base, the subsection may describe the implemented generator, the preprocessing options, and the solver configurations used for each formulation.
 
 
 \bibliographystyle{plainnat}
