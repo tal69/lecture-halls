@@ -115,6 +115,26 @@ d_{h_1,g} \ge d_{h_1,h_2}.
 \]
 Therefore \eqref{eq:milp-link-strong} cannot cut off any integer-feasible assignment, although it may cut fractional solutions and thereby strengthen the linear relaxation.
 
+By symmetry, one may also add
+\begin{equation}
+z_{l_1 l_2} \ge d_{h_1,h_2}\bigl(\sum_{h: d_{h,h_2} \ge d_{h_1,h_2}} x_{l_1 h} -1 + x_{l_2 h_2} \bigr), \qquad \forall (l_1,l_2) \in A',  h_1 \in H(l_1), h_2 \in H(l_2). \label{eq:milp-link-strong-sym}
+\end{equation}
+The same validity argument applies after interchanging the roles of $l_1$ and $l_2$. Hence \eqref{eq:milp-link-strong} and \eqref{eq:milp-link-strong-sym} may be imposed together, potentially yielding a stronger linear relaxation.
+
+The original strong cut can also be enlarged on the $l_1$ side. For fixed $(l_1,l_2)$, $h_1$, and $h_2$, let
+\[
+S_2(h_1,h_2)=\{\,h \in H(l_2) : d_{h_1,h} \ge d_{h_1,h_2}\,\}
+\]
+and define
+\[
+S_1^+(h_1,h_2)=\{\,g \in H(l_1) : d_{g,h} \ge d_{h_1,h_2} \text{ for all } h \in S_2(h_1,h_2)\,\}.
+\]
+Then
+\begin{equation}
+z_{l_1 l_2} \ge d_{h_1,h_2}\left(\sum_{g \in S_1^+(h_1,h_2)} x_{l_1 g} -1 + \sum_{h \in S_2(h_1,h_2)} x_{l_2 h}\right), \qquad \forall (l_1,l_2) \in A',\ h_1 \in H(l_1),\ h_2 \in H(l_2). \label{eq:milp-link-strong-ext}
+\end{equation}
+This inequality is valid because whenever the assigned hall of $l_1$ lies in $S_1^+(h_1,h_2)$ and the assigned hall of $l_2$ lies in $S_2(h_1,h_2)$, every cross-pair between the two sets is at distance at least $d_{h_1,h_2}$. Otherwise the right-hand side of \eqref{eq:milp-link-strong-ext} is nonpositive. Since $h_1 \in S_1^+(h_1,h_2)$, inequality \eqref{eq:milp-link-strong-ext} dominates \eqref{eq:milp-link-strong} pointwise.
+
 The strengthening can in fact be strict on a large family of fractional points. Fix $(l_1,l_2) \in A'$ with $c_{l_1,l_2}>0$, and let $A=\{a_1,\ldots,a_p\} \subseteq H(l_1)$ and $B=\{b_1,\ldots,b_q\} \subseteq H(l_2)$ with $p,q \ge 2$. Assume that $d_{a_i,b_j}=D>0$ for every $a_i \in A$ and $b_j \in B$. Consider the fractional point defined by
 \[
 x_{l_1,a_i}=\frac{1}{p} \quad \forall a_i \in A, \qquad

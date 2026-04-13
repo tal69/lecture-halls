@@ -140,11 +140,12 @@ def parse_args() -> argparse.Namespace:
         "--cuts",
         dest="cuts",
         type=int,
-        choices=(0, 1),
+        choices=(0, 1, 2, 3),
         default=1,
         help=(
             "Linearized MILP cut mode: 0 = base link constraints only, "
-            "1 = strong cut only. Default: 1."
+            "1 = strong cut only, 2 = strong + symmetric strong cuts, "
+            "3 = one-sided extended strong cuts. Default: 1."
         ),
     )
     parser.add_argument(
@@ -1141,7 +1142,7 @@ def build_gurobi_linearized_model(
                         name=f"link_{lecture_id_1}_{lecture_id_2}_{hall_id_1}_{hall_id_2}",
                     )
 
-    if cuts == 1:
+    if cuts in (1, 2):
         for (lecture_id_1, lecture_id_2), common_count in instance.common_students.items():
             halls_1 = instance.compatibility[lecture_id_1]
             halls_2 = instance.compatibility[lecture_id_2]
@@ -1164,6 +1165,64 @@ def build_gurobi_linearized_model(
                             + quicksum(x[(lecture_id_2, hall_id)] for hall_id in farther_halls)
                         ),
                         name=f"strong_{lecture_id_1}_{lecture_id_2}_{hall_id_1}_{hall_id_2}",
+                    )
+
+    if cuts == 2:
+        for (lecture_id_1, lecture_id_2), common_count in instance.common_students.items():
+            halls_1 = instance.compatibility[lecture_id_1]
+            halls_2 = instance.compatibility[lecture_id_2]
+
+            for hall_id_1 in halls_1:
+                for hall_id_2 in halls_2:
+                    threshold_distance = instance.distances[hall_id_1][hall_id_2]
+                    farther_halls = [
+                        hall_id
+                        for hall_id in halls_1
+                        if instance.distances[hall_id][hall_id_2] >= threshold_distance
+                    ]
+                    model.addConstr(
+                        pair_vars[(lecture_id_1, lecture_id_2)]
+                        >= common_count
+                        * threshold_distance
+                        * (
+                            quicksum(x[(lecture_id_1, hall_id)] for hall_id in farther_halls)
+                            - 1
+                            + x[(lecture_id_2, hall_id_2)]
+                        ),
+                        name=f"strongsym_{lecture_id_1}_{lecture_id_2}_{hall_id_1}_{hall_id_2}",
+                    )
+
+    if cuts == 3:
+        for (lecture_id_1, lecture_id_2), common_count in instance.common_students.items():
+            halls_1 = instance.compatibility[lecture_id_1]
+            halls_2 = instance.compatibility[lecture_id_2]
+
+            for hall_id_1 in halls_1:
+                for hall_id_2 in halls_2:
+                    threshold_distance = instance.distances[hall_id_1][hall_id_2]
+                    far_halls_2 = [
+                        hall_id
+                        for hall_id in halls_2
+                        if instance.distances[hall_id_1][hall_id] >= threshold_distance
+                    ]
+                    far_halls_1 = [
+                        hall_id
+                        for hall_id in halls_1
+                        if all(
+                            instance.distances[hall_id][far_hall_2] >= threshold_distance
+                            for far_hall_2 in far_halls_2
+                        )
+                    ]
+                    model.addConstr(
+                        pair_vars[(lecture_id_1, lecture_id_2)]
+                        >= common_count
+                        * threshold_distance
+                        * (
+                            quicksum(x[(lecture_id_1, hall_id)] for hall_id in far_halls_1)
+                            - 1
+                            + quicksum(x[(lecture_id_2, hall_id)] for hall_id in far_halls_2)
+                        ),
+                        name=f"strongext_{lecture_id_1}_{lecture_id_2}_{hall_id_1}_{hall_id_2}",
                     )
 
     if cuts == 0:

@@ -92,9 +92,11 @@ python lecture_hall_experiment.py \
 - `--seed`: one seed, a closed range such as `1-100`, or a start-step-end pattern such as `1-3-10`. Default: `0`.
 - `--density`: target lecture-slot utilization, interpreted as total lecture slots divided by total available hall-slots in the day. Default: `0.9`.
 - `--time-limit`: per-solver time limit in seconds. Default: `60`.
-- `--cuts {0,1}`: cut mode for the linearized GUROBI model.
+- `--cuts {0,1,2,3}`: cut mode for the linearized GUROBI model.
   - `0`: base compact linking constraints only.
   - `1`: strong compact linking constraints only.
+  - `2`: strong compact linking constraints plus the symmetric strong family.
+  - `3`: one-sided extended strong cuts that enlarge the original strong family on the `l1` side.
 - `--model`: optional single model to solve.
   - `MIPQ`: bilinear GUROBI formulation.
   - `MIP`: compact linearized GUROBI formulation.
@@ -111,7 +113,11 @@ python lecture_hall_experiment.py \
 
 The current `MIP` model uses the **compact** linearization from the paper:
 - binary assignment variables `x_(l,h)`,
-- one nonnegative continuous variable `y_(l1,l2)` per successor pair.
+- one nonnegative continuous pair variable per successor pair.
+
+Implementation note:
+- `--cuts 0` uses the rescaled distance variable form from the paper.
+- `--cuts 1`, `--cuts 2`, and `--cuts 3` use the equivalent weighted pair-cost substitution for computational reasons.
 
 It does **not** use the older four-index linearization with variables `y_(l1,l2,h1,h2)`.
 
