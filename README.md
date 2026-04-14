@@ -186,6 +186,9 @@ The Excel file contains a single `summary` sheet. Repeated runs append new rows 
 - compatibility-preprocessing statistics,
 - solver status,
 - objective value,
+- the two objective components:
+  - total student walking distance,
+  - matching penalty,
 - lower bound,
 - best global lower bound across solved methods for that instance,
 - optimality gap and global optimality gap,

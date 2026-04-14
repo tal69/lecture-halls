@@ -2190,6 +2190,13 @@ def build_summary_rows(
         obj = result.get("objective_value")
         lb = result.get("lower_bound")
         gap = result.get("mip_gap")
+        solution = result.get("solution")
+        walking_objective_value = (
+            solution["recomputed_walking_objective"] if solution is not None else None
+        )
+        matching_penalty_value = (
+            solution["recomputed_assignment_penalty"] if solution is not None else None
+        )
         if gap is None and obj is not None and lb is not None:
             if obj != 0:
                 gap = max(0.0, float(obj - lb) / abs(float(obj)))
@@ -2258,6 +2265,8 @@ def build_summary_rows(
                 "formulation": result["formulation"],
                 "status": result["status"],
                 "objective_value": result["objective_value"],
+                "total_student_walking_distance": walking_objective_value,
+                "matching_penalty": matching_penalty_value,
                 "lower_bound": result["lower_bound"],
                 "best_global_lower_bound": best_global_lower_bound,
                 "wall_clock_seconds": result["wall_clock_seconds"],
