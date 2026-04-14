@@ -7,6 +7,7 @@ This repository contains a simulation and optimization tool for the lecture hall
 The current workflow includes:
 - a random single-day instance generator,
 - a student-journey simulation that determines lecture sizes and the realized successor set \(A'\),
+- an optional family of capacity-dominance cardinality constraints derived from maximal overlap cliques,
 - three main solver backends:
   - GUROBI bilinear `MIPQ`,
   - GUROBI linearized `MIP`,
@@ -130,6 +131,9 @@ python lecture_hall_experiment.py \
   - `1`: strong compact linking constraints only.
   - `2`: strong compact linking constraints plus the symmetric strong family.
   - `3`: one-sided extended strong cuts that enlarge the original strong family on the `l1` side.
+- `--cardinality`: enable the capacity-dominance cardinality constraints derived from maximal overlap cliques and hall-capacity thresholds.
+  - Disabled by default.
+  - Applies to `MIPQ`, `MIP`, `CP`, and `ROOT`.
 - `--model`: optional single model to solve.
   - `MIPQ`: bilinear GUROBI formulation.
   - `MIP`: compact linearized GUROBI formulation.
@@ -141,6 +145,7 @@ python lecture_hall_experiment.py \
   - `full`: for each lecture `l'`, solve the hard-feasibility assignment model on all lectures while maximizing the capacity assigned to `l'`, then remove from `H(l')` every hall whose capacity is larger than the resulting maximum.
   - `light`: same idea, but solve the subproblem only on `l'` and lectures that overlap `l'`.
   - The `light` mode is safe but weaker: it may leave extra halls in `H(l')`, yet it cannot remove a hall that is needed by a globally feasible solution.
+  - The reduction is now applied iteratively until a fixed point is reached, so later subproblems benefit from earlier compatibility shrinkage.
 - `--instance-only`: generate the instance only, print the input in a user-friendly terminal format, and write JSON export(s). No solver is run and no Excel workbook is written.
 - `--output`: Excel output path. Default: `results.xlsx`.
 - `-s`, `--save-json`: also write a JSON file with the full instance and all solutions.
@@ -171,6 +176,8 @@ For a target lecture `l'`, the preprocessing objective is to maximize the capaci
 The implementation provides two scopes:
 - `full`: solve the subproblem on all lectures.
 - `light`: solve it only on `l'` and lectures that overlap `l'`.
+
+In both scopes, the preprocessing is run to a fixed point: after one full pass over the lectures, the reduced compatibility sets are fed back into the same subproblems and the process repeats until no `H(l)` shrinks any further.
 
 If preprocessing empties some `H(l)`, the script declares the instance infeasible before calling the main solvers.
 

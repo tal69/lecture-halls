@@ -97,6 +97,16 @@ class Instance:
     compatibility_preprocess_nonoptimal_subproblems: int = 0
 
 
+@dataclass(frozen=True)
+class CapacityDominanceCut:
+    clique_index: int
+    day: int
+    threshold: int
+    eligible_lecture_ids: tuple[int, ...]
+    large_hall_ids: tuple[int, ...]
+    rhs: int
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -156,6 +166,15 @@ def parse_args() -> argparse.Namespace:
             "Linearized MILP cut mode: 0 = base link constraints only, "
             "1 = strong cut only, 2 = strong + symmetric strong cuts, "
             "3 = one-sided extended strong cuts. Default: 1."
+        ),
+    )
+    parser.add_argument(
+        "--cardinality",
+        dest="cardinality",
+        action="store_true",
+        help=(
+            "Enable capacity-dominance cardinality constraints derived from maximal "
+            "overlap cliques and hall-capacity thresholds. Disabled by default."
         ),
     )
     parser.add_argument(
@@ -1250,6 +1269,95 @@ def build_overlap_neighbors(instance: Instance) -> dict[int, set[int]]:
     return neighbors
 
 
+def build_maximal_active_cliques(instance: Instance) -> list[tuple[int, tuple[int, ...]]]:
+    lecture_map = {lecture.lecture_id: lecture for lecture in instance.lectures}
+    active_sets_by_day: dict[int, set[frozenset[int]]] = defaultdict(set)
+
+    for active_lectures in instance.active_lectures_by_slot.values():
+        if len(active_lectures) <= 1:
+            continue
+        active_set = frozenset(active_lectures)
+        sample_lecture_id = next(iter(active_set))
+        day = lecture_map[sample_lecture_id].day
+        active_sets_by_day[day].add(active_set)
+
+    maximal_cliques: list[tuple[int, tuple[int, ...]]] = []
+    for day in sorted(active_sets_by_day):
+        day_sets = sorted(
+            active_sets_by_day[day],
+            key=lambda active_set: (
+                -len(active_set),
+                min(lecture_map[lecture_id].start_slot for lecture_id in active_set),
+                tuple(sorted(active_set)),
+            ),
+        )
+        maximal_sets: list[frozenset[int]] = []
+        for active_set in day_sets:
+            if any(active_set < other_set for other_set in maximal_sets):
+                continue
+            maximal_sets.append(active_set)
+
+        maximal_sets.sort(
+            key=lambda active_set: (
+                min(lecture_map[lecture_id].start_slot for lecture_id in active_set),
+                tuple(sorted(active_set)),
+            )
+        )
+        maximal_cliques.extend(
+            (day, tuple(sorted(active_set)))
+            for active_set in maximal_sets
+        )
+
+    return maximal_cliques
+
+
+def build_capacity_dominance_cuts(instance: Instance) -> list[CapacityDominanceCut]:
+    lecture_map = {lecture.lecture_id: lecture for lecture in instance.lectures}
+    threshold_halls: list[tuple[int, tuple[int, ...], set[int]]] = []
+    for threshold in sorted({hall.capacity for hall in instance.halls}):
+        large_hall_ids = tuple(
+            sorted(hall.hall_id for hall in instance.halls if hall.capacity > threshold)
+        )
+        if not large_hall_ids:
+            continue
+        threshold_halls.append((threshold, large_hall_ids, set(large_hall_ids)))
+
+    cuts: list[CapacityDominanceCut] = []
+    for clique_index, (day, clique_lecture_ids) in enumerate(build_maximal_active_cliques(instance)):
+        for threshold, large_hall_ids, large_hall_id_set in threshold_halls:
+            num_large_lectures = sum(
+                1
+                for lecture_id in clique_lecture_ids
+                if lecture_map[lecture_id].students > threshold
+            )
+            rhs = len(large_hall_ids) - num_large_lectures
+            eligible_lecture_ids = tuple(
+                lecture_id
+                for lecture_id in clique_lecture_ids
+                if lecture_map[lecture_id].students <= threshold
+                and any(
+                    hall_id in large_hall_id_set
+                    for hall_id in instance.compatibility[lecture_id]
+                )
+            )
+            if not eligible_lecture_ids and rhs >= 0:
+                continue
+            if rhs >= len(eligible_lecture_ids):
+                continue
+            cuts.append(
+                CapacityDominanceCut(
+                    clique_index=clique_index,
+                    day=day,
+                    threshold=threshold,
+                    eligible_lecture_ids=eligible_lecture_ids,
+                    large_hall_ids=large_hall_ids,
+                    rhs=rhs,
+                )
+            )
+
+    return cuts
+
+
 def cp_sat_capacity_upper_bound(
     instance: Instance,
     compatibility: dict[int, list[int]],
@@ -1345,46 +1453,61 @@ def apply_compatibility_preprocessing(
     }
     hall_capacity_by_id = {hall.hall_id: hall.capacity for hall in instance.halls}
     lecture_ids_all = [lecture.lecture_id for lecture in instance.lectures]
-    reduced_compatibility: dict[int, list[int]] = {}
-    infeasible = False
     wall_start = time.perf_counter()
-    tightened_lectures = 0
+    tightened_lecture_ids: set[int] = set()
+    total_subproblems = 0
     optimal_subproblems = 0
     nonoptimal_subproblems = 0
 
-    for lecture in instance.lectures:
-        lecture_id = lecture.lecture_id
-        if mode == "full":
-            lecture_subset = lecture_ids_all
-        else:
-            lecture_subset = sorted({lecture_id, *overlap_neighbors[lecture_id]})
+    infeasible = False
+    while True:
+        reduced_compatibility: dict[int, list[int]] = {}
+        round_changed = False
+        infeasible = False
 
-        upper_capacity, status_name = cp_sat_capacity_upper_bound(
-            instance=instance,
-            compatibility=compatibility,
-            target_lecture_id=lecture_id,
-            lecture_subset=lecture_subset,
-            num_search_workers=thread_limit,
-        )
-        if status_name == "OPTIMAL":
-            optimal_subproblems += 1
-        else:
-            nonoptimal_subproblems += 1
-        if upper_capacity is None:
-            reduced_compatibility[lecture_id] = []
-            infeasible = True
-            continue
+        for lecture in instance.lectures:
+            lecture_id = lecture.lecture_id
+            if mode == "full":
+                lecture_subset = lecture_ids_all
+            else:
+                lecture_subset = sorted({lecture_id, *overlap_neighbors[lecture_id]})
 
-        max_capacity_before = max(hall_capacity_by_id[hall_id] for hall_id in compatibility[lecture_id])
-        if upper_capacity < max_capacity_before:
-            tightened_lectures += 1
-        reduced_compatibility[lecture_id] = [
-            hall_id
-            for hall_id in compatibility[lecture_id]
-            if hall_capacity_by_id[hall_id] <= upper_capacity
-        ]
-        if not reduced_compatibility[lecture_id]:
-            infeasible = True
+            upper_capacity, status_name = cp_sat_capacity_upper_bound(
+                instance=instance,
+                compatibility=compatibility,
+                target_lecture_id=lecture_id,
+                lecture_subset=lecture_subset,
+                num_search_workers=thread_limit,
+            )
+            total_subproblems += 1
+            if status_name == "OPTIMAL":
+                optimal_subproblems += 1
+            else:
+                nonoptimal_subproblems += 1
+            if upper_capacity is None:
+                reduced_compatibility[lecture_id] = []
+                infeasible = True
+                continue
+
+            max_capacity_before = max(hall_capacity_by_id[hall_id] for hall_id in compatibility[lecture_id])
+            reduced_compatibility[lecture_id] = [
+                hall_id
+                for hall_id in compatibility[lecture_id]
+                if hall_capacity_by_id[hall_id] <= upper_capacity
+            ]
+            if not reduced_compatibility[lecture_id]:
+                infeasible = True
+            if reduced_compatibility[lecture_id] != compatibility[lecture_id]:
+                round_changed = True
+                if upper_capacity < max_capacity_before:
+                    tightened_lecture_ids.add(lecture_id)
+
+        compatibility = {
+            lecture_id: list(hall_ids)
+            for lecture_id, hall_ids in reduced_compatibility.items()
+        }
+        if infeasible or not round_changed:
+            break
 
     reduced_assignment_penalties = {
         lecture_id: {
@@ -1402,9 +1525,9 @@ def apply_compatibility_preprocessing(
             compatibility_preprocess_mode=mode,
             compatibility_entries_before=compatibility_entries_before,
             compatibility_entries_after=compatibility_entries_after,
-            compatibility_preprocess_subproblems=len(instance.lectures),
+            compatibility_preprocess_subproblems=total_subproblems,
             compatibility_preprocess_wall_seconds=time.perf_counter() - wall_start,
-            compatibility_preprocess_tightened_lectures=tightened_lectures,
+            compatibility_preprocess_tightened_lectures=len(tightened_lecture_ids),
             compatibility_preprocess_optimal_subproblems=optimal_subproblems,
             compatibility_preprocess_nonoptimal_subproblems=nonoptimal_subproblems,
         ),
@@ -1591,6 +1714,7 @@ def build_gurobi_linearized_model(
     cuts: int,
     time_limit: float | None,
     verbose: bool,
+    cardinality: bool = False,
     threads: int | None = None,
 ) -> tuple[Model, dict[tuple[int, int], Any], dict[tuple[int, int], Any], int]:
     thread_limit = gurobi_thread_limit() if threads is None else threads
@@ -1648,6 +1772,19 @@ def build_gurobi_linearized_model(
                     quicksum(vars_for_slot) <= 1,
                     name=f"overlap_h{hall.hall_id}_t{slot}",
                 )
+
+    if cardinality:
+        for cut in build_capacity_dominance_cuts(instance):
+            expr = quicksum(
+                x[(lecture_id, hall_id)]
+                for lecture_id in cut.eligible_lecture_ids
+                for hall_id in cut.large_hall_ids
+                if (lecture_id, hall_id) in x
+            )
+            model.addConstr(
+                expr <= cut.rhs,
+                name=f"card_d{cut.day}_c{cut.clique_index}_k{cut.threshold}",
+            )
 
     if cuts == 0:
         for lecture_id_1, lecture_id_2 in instance.common_students:
@@ -1763,7 +1900,12 @@ def build_gurobi_linearized_model(
     return model, x, pair_vars, thread_limit
 
 
-def solve_gurobi_quadratic(instance: Instance, time_limit: float, verbose: bool = True) -> dict[str, Any]:
+def solve_gurobi_quadratic(
+    instance: Instance,
+    time_limit: float,
+    verbose: bool = True,
+    cardinality: bool = False,
+) -> dict[str, Any]:
     wall_start = time.perf_counter()
     thread_limit = gurobi_thread_limit()
     try:
@@ -1807,6 +1949,19 @@ def solve_gurobi_quadratic(instance: Instance, time_limit: float, verbose: bool 
                         quicksum(vars_for_slot) <= 1,
                         name=f"overlap_h{hall.hall_id}_t{slot}",
                     )
+
+        if cardinality:
+            for cut in build_capacity_dominance_cuts(instance):
+                expr = quicksum(
+                    x[(lecture_id, hall_id)]
+                    for lecture_id in cut.eligible_lecture_ids
+                    for hall_id in cut.large_hall_ids
+                    if (lecture_id, hall_id) in x
+                )
+                model.addConstr(
+                    expr <= cut.rhs,
+                    name=f"card_d{cut.day}_c{cut.clique_index}_k{cut.threshold}",
+                )
 
         objective_terms = []
         for (lecture_id_1, lecture_id_2), common_count in instance.common_students.items():
@@ -1875,6 +2030,7 @@ def solve_gurobi_linearized(
     time_limit: float,
     cuts: int = 1,
     verbose: bool = True,
+    cardinality: bool = False,
 ) -> dict[str, Any]:
     wall_start = time.perf_counter()
     try:
@@ -1883,6 +2039,7 @@ def solve_gurobi_linearized(
             cuts=cuts,
             time_limit=time_limit,
             verbose=verbose,
+            cardinality=cardinality,
         )
         model.optimize()
 
@@ -1936,6 +2093,7 @@ def solve_gurobi_linearized_root(
     time_limit: float,
     cuts: int = 1,
     verbose: bool = True,
+    cardinality: bool = False,
 ) -> dict[str, Any]:
     wall_start = time.perf_counter()
     try:
@@ -1944,6 +2102,7 @@ def solve_gurobi_linearized_root(
             cuts=cuts,
             time_limit=time_limit,
             verbose=verbose,
+            cardinality=cardinality,
         )
         model._root_bound = None
         model._terminated_after_root = False
@@ -2004,7 +2163,12 @@ def solve_gurobi_linearized_root(
         }
 
 
-def solve_cp_sat(instance: Instance, time_limit: float, verbose: bool = True) -> dict[str, Any]:
+def solve_cp_sat(
+    instance: Instance,
+    time_limit: float,
+    verbose: bool = True,
+    cardinality: bool = False,
+) -> dict[str, Any]:
     wall_start = time.perf_counter()
     model = cp_model.CpModel()
     thread_limit = gurobi_thread_limit()
@@ -2020,6 +2184,42 @@ def solve_cp_sat(instance: Instance, time_limit: float, verbose: bool = True) ->
     for active_lectures in instance.active_lectures_by_slot.values():
         if len(active_lectures) > 1:
             model.AddAllDifferent([hall_assignment[lecture_id] for lecture_id in active_lectures])
+
+    if cardinality:
+        cuts = build_capacity_dominance_cuts(instance)
+        large_halls_by_threshold = {
+            cut.threshold: set(cut.large_hall_ids)
+            for cut in cuts
+        }
+        assigned_to_large_hall: dict[tuple[int, int], cp_model.IntVar] = {}
+
+        def large_hall_indicator(lecture_id: int, threshold: int) -> cp_model.IntVar:
+            key = (lecture_id, threshold)
+            if key in assigned_to_large_hall:
+                return assigned_to_large_hall[key]
+            indicator = model.NewBoolVar(f"card_{lecture_id}_{threshold}")
+            model.AddAllowedAssignments(
+                [hall_assignment[lecture_id], indicator],
+                [
+                    (hall_id, 1 if hall_id in large_halls_by_threshold[threshold] else 0)
+                    for hall_id in instance.compatibility[lecture_id]
+                ],
+            )
+            assigned_to_large_hall[key] = indicator
+            return indicator
+
+        for cut in cuts:
+            if not cut.eligible_lecture_ids:
+                if cut.rhs < 0:
+                    model.AddBoolOr([])
+                continue
+            model.Add(
+                sum(
+                    large_hall_indicator(lecture_id, cut.threshold)
+                    for lecture_id in cut.eligible_lecture_ids
+                )
+                <= cut.rhs
+            )
 
     objective_terms: list[Any] = []
     for lecture in instance.lectures:
@@ -2143,6 +2343,7 @@ def build_summary_rows(
     finished_at: dt.datetime,
     time_limit: float,
     cuts_mode: int,
+    cardinality_enabled: bool,
 ) -> list[dict[str, Any]]:
     total_lecture_length = sum(lecture.duration for lecture in instance.lectures)
     sizes = [lecture.students for lecture in instance.lectures]
@@ -2229,6 +2430,7 @@ def build_summary_rows(
                 "free_waste_ratio": FREE_WASTE_RATIO,
                 "time_limit_seconds": time_limit,
                 "linearized_cuts": cuts_mode,
+                "cardinality_enabled": cardinality_enabled,
                 "num_lectures": len(instance.lectures),
                 "total_lecture_length": total_lecture_length,
                 "avg_lecture_length": total_lecture_length / len(instance.lectures),
@@ -2442,6 +2644,7 @@ def build_json_payload(
     finished_at: dt.datetime,
     time_limit: float,
     cuts_mode: int,
+    cardinality_enabled: bool,
 ) -> dict[str, Any]:
     return {
         "experiment": {
@@ -2452,6 +2655,7 @@ def build_json_payload(
             "python_version": sys.version,
             "time_limit_seconds": time_limit,
             "linearized_cuts": cuts_mode,
+            "cardinality_enabled": cardinality_enabled,
             "compatibility_preprocess_mode": instance.compatibility_preprocess_mode,
         },
         "instance": instance_to_json_dict(instance),
@@ -2742,18 +2946,34 @@ def main() -> None:
             )
         elif args.model is None:
             results = [
-                solve_gurobi_quadratic(instance, args.time_limit, verbose=not args.quiet),
+                solve_gurobi_quadratic(
+                    instance,
+                    args.time_limit,
+                    verbose=not args.quiet,
+                    cardinality=args.cardinality,
+                ),
                 solve_gurobi_linearized(
                     instance,
                     args.time_limit,
                     cuts=args.cuts,
                     verbose=not args.quiet,
+                    cardinality=args.cardinality,
                 ),
-                solve_cp_sat(instance, args.time_limit, verbose=not args.quiet),
+                solve_cp_sat(
+                    instance,
+                    args.time_limit,
+                    verbose=not args.quiet,
+                    cardinality=args.cardinality,
+                ),
             ]
         elif args.model == "MIPQ":
             results = [
-                solve_gurobi_quadratic(instance, args.time_limit, verbose=not args.quiet),
+                solve_gurobi_quadratic(
+                    instance,
+                    args.time_limit,
+                    verbose=not args.quiet,
+                    cardinality=args.cardinality,
+                ),
             ]
         elif args.model == "MIP":
             results = [
@@ -2762,11 +2982,17 @@ def main() -> None:
                     args.time_limit,
                     cuts=args.cuts,
                     verbose=not args.quiet,
+                    cardinality=args.cardinality,
                 ),
             ]
         elif args.model == "CP":
             results = [
-                solve_cp_sat(instance, args.time_limit, verbose=not args.quiet),
+                solve_cp_sat(
+                    instance,
+                    args.time_limit,
+                    verbose=not args.quiet,
+                    cardinality=args.cardinality,
+                ),
             ]
         else:
             results = [
@@ -2775,6 +3001,7 @@ def main() -> None:
                     args.time_limit,
                     cuts=args.cuts,
                     verbose=not args.quiet,
+                    cardinality=args.cardinality,
                 ),
             ]
 
@@ -2786,6 +3013,7 @@ def main() -> None:
             finished_at=finished_at,
             time_limit=args.time_limit,
             cuts_mode=args.cuts,
+            cardinality_enabled=args.cardinality,
         )
         all_summary_rows.extend(summary_rows)
         write_excel(output_path, summary_rows)
@@ -2800,6 +3028,7 @@ def main() -> None:
                 finished_at=finished_at,
                 time_limit=args.time_limit,
                 cuts_mode=args.cuts,
+                cardinality_enabled=args.cardinality,
             )
             write_json(json_path, payload)
             print(f"JSON written to: {json_path}")
