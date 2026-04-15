@@ -163,9 +163,10 @@ def parse_args() -> argparse.Namespace:
         choices=(0, 1, 2, 3),
         default=1,
         help=(
-            "Linearized MILP cut mode: 0 = base link constraints only, "
+            "Pair-distance cut mode: 0 = base link constraints only, "
             "1 = strong cut only, 2 = strong + symmetric strong cuts, "
-            "3 = one-sided extended strong cuts. Default: 1."
+            "3 = one-sided extended strong cuts. The CP model uses mode 3 as an "
+            "additional propagation layer. Default: 1."
         ),
     )
     parser.add_argument(
@@ -766,17 +767,15 @@ def assign_balanced_course_attributes(
     raise RuntimeError("Failed to assign balanced lecture attributes under cohort overlap rules.")
 
 
-def generate_lectures(
-    halls: list[Hall],
-    slots_per_day: int,
-    density: float,
-    rng: random.Random,
-) -> list[Lecture]:
-    total_capacity = len(halls) * DAYS_PER_WEEK * slots_per_day
-    target_busy_slots = max(2, min(total_capacity, int(round(density * total_capacity))))
-    durations = duration_list_for_total(target_busy_slots, rng)
-    bins = assign_durations_to_bins(durations, len(halls), DAYS_PER_WEEK, slots_per_day, rng)
+def max_simultaneous_lectures_under_cohort_rules() -> int:
+    return 2 * len(SUBJECTS) * len(STUDY_YEARS)
 
+
+def build_lecture_slots_from_bins(
+    bins: list[dict[str, Any]],
+    slots_per_day: int,
+    rng: random.Random,
+) -> list[dict[str, int]]:
     lecture_slots: list[dict[str, int]] = []
     for bin_info in bins:
         day = int(bin_info["day"])
@@ -803,8 +802,65 @@ def generate_lectures(
                 }
             )
             current += duration + gaps[index + 1]
+    return lecture_slots
 
-    attribute_assignments = assign_balanced_course_attributes(lecture_slots, rng)
+
+def max_slot_coverage(lecture_slots: list[dict[str, int]]) -> int:
+    slot_coverage = build_lecture_slot_coverage(lecture_slots)
+    return max((len(lecture_indices) for lecture_indices in slot_coverage.values()), default=0)
+
+
+def generate_lectures(
+    halls: list[Hall],
+    slots_per_day: int,
+    density: float,
+    rng: random.Random,
+) -> list[Lecture]:
+    total_capacity = len(halls) * DAYS_PER_WEEK * slots_per_day
+    target_busy_slots = max(2, min(total_capacity, int(round(density * total_capacity))))
+    max_simultaneous_lectures = max_simultaneous_lectures_under_cohort_rules()
+    max_busy_slots_under_cohort_rules = max_simultaneous_lectures * DAYS_PER_WEEK * slots_per_day
+    if target_busy_slots > max_busy_slots_under_cohort_rules:
+        max_density = max_busy_slots_under_cohort_rules / total_capacity if total_capacity else 0.0
+        raise ValueError(
+            "Requested density "
+            f"{density:.3f} with {len(halls)} halls implies {target_busy_slots} lecture-slots, "
+            "but the current cohort overlap rules with "
+            f"{len(SUBJECTS) * len(STUDY_YEARS)} subject-year cohorts allow at most "
+            f"{max_busy_slots_under_cohort_rules} lecture-slots in total "
+            f"({max_simultaneous_lectures} simultaneous lectures per slot, "
+            f"maximum feasible density {max_density:.3f}). "
+            "Reduce the density or increase the number of cohorts."
+        )
+    durations = duration_list_for_total(target_busy_slots, rng)
+    best_max_coverage = 0
+    last_assignment_error: RuntimeError | None = None
+    for _ in range(100):
+        bins = assign_durations_to_bins(durations, len(halls), DAYS_PER_WEEK, slots_per_day, rng)
+        lecture_slots = build_lecture_slots_from_bins(bins, slots_per_day, rng)
+        current_max_coverage = max_slot_coverage(lecture_slots)
+        best_max_coverage = max(best_max_coverage, current_max_coverage)
+        if current_max_coverage > max_simultaneous_lectures:
+            continue
+        try:
+            attribute_assignments = assign_balanced_course_attributes(lecture_slots, rng)
+            break
+        except RuntimeError as error:
+            last_assignment_error = error
+    else:
+        if last_assignment_error is not None:
+            raise RuntimeError(
+                "Failed to assign balanced lecture attributes after 100 lecture-layout attempts "
+                "that respected the cohort concurrency bound. "
+                f"The current cohort system supports at most {max_simultaneous_lectures} "
+                "simultaneous lectures per slot."
+            ) from last_assignment_error
+        raise RuntimeError(
+            "Failed to generate a lecture layout compatible with the cohort overlap rules after "
+            f"100 attempts. The densest attempted layout required {best_max_coverage} simultaneous "
+            f"lectures, while the current cohort system supports at most "
+            f"{max_simultaneous_lectures}."
+        )
 
     lectures: list[Lecture] = []
     for lecture_id, (lecture_slot, assignment) in enumerate(zip(lecture_slots, attribute_assignments, strict=True)):
@@ -1358,6 +1414,64 @@ def build_capacity_dominance_cuts(instance: Instance) -> list[CapacityDominanceC
     return cuts
 
 
+def add_cp_extended_strong_distance_propagation(
+    model: cp_model.CpModel,
+    instance: Instance,
+    hall_assignment: dict[int, cp_model.IntVar],
+    z_vars: dict[tuple[int, int], cp_model.IntVar],
+) -> None:
+    subset_indicator_cache: dict[tuple[int, tuple[int, ...]], cp_model.IntVar] = {}
+
+    def subset_indicator(lecture_id: int, hall_subset: tuple[int, ...]) -> cp_model.IntVar:
+        key = (lecture_id, hall_subset)
+        if key in subset_indicator_cache:
+            return subset_indicator_cache[key]
+
+        indicator = model.NewBoolVar(f"zcut_{lecture_id}_{len(subset_indicator_cache)}")
+        hall_subset_set = set(hall_subset)
+        model.AddAllowedAssignments(
+            [hall_assignment[lecture_id], indicator],
+            [
+                (hall_id, 1 if hall_id in hall_subset_set else 0)
+                for hall_id in instance.compatibility[lecture_id]
+            ],
+        )
+        subset_indicator_cache[key] = indicator
+        return indicator
+
+    for (lecture_id_1, lecture_id_2), z_var in z_vars.items():
+        halls_1 = instance.compatibility[lecture_id_1]
+        halls_2 = instance.compatibility[lecture_id_2]
+        seen_patterns: set[tuple[tuple[int, ...], tuple[int, ...], int]] = set()
+
+        for hall_id_1 in halls_1:
+            for hall_id_2 in halls_2:
+                threshold_distance = instance.distances[hall_id_1][hall_id_2]
+                far_halls_2 = tuple(
+                    hall_id
+                    for hall_id in halls_2
+                    if instance.distances[hall_id_1][hall_id] >= threshold_distance
+                )
+                far_halls_1 = tuple(
+                    hall_id
+                    for hall_id in halls_1
+                    if all(
+                        instance.distances[hall_id][far_hall_2] >= threshold_distance
+                        for far_hall_2 in far_halls_2
+                    )
+                )
+                pattern = (far_halls_1, far_halls_2, threshold_distance)
+                if pattern in seen_patterns:
+                    continue
+                seen_patterns.add(pattern)
+
+                left_indicator = subset_indicator(lecture_id_1, far_halls_1)
+                right_indicator = subset_indicator(lecture_id_2, far_halls_2)
+                model.Add(z_var >= threshold_distance).OnlyEnforceIf(
+                    [left_indicator, right_indicator]
+                )
+
+
 def cp_sat_capacity_upper_bound(
     instance: Instance,
     compatibility: dict[int, list[int]],
@@ -1729,8 +1843,10 @@ def build_gurobi_linearized_model(
         model.Params.ObjScale = -0.5
 
     x: dict[tuple[int, int], Any] = {}
-    pair_var_name = "z" if cuts == 0 else "y"
-    pair_vars: dict[tuple[int, int], Any] = {}
+    # The paper denotes this pair auxiliary uniformly by z_{l1,l2}. For cuts > 0
+    # the implementation keeps the same z-based name even though the common-student
+    # weight is folded into the strengthened linear inequalities for scaling.
+    z_vars: dict[tuple[int, int], Any] = {}
 
     for lecture in instance.lectures:
         for hall_id in instance.compatibility[lecture.lecture_id]:
@@ -1740,10 +1856,10 @@ def build_gurobi_linearized_model(
             )
 
     for lecture_id_1, lecture_id_2 in instance.common_students:
-        pair_vars[(lecture_id_1, lecture_id_2)] = model.addVar(
+        z_vars[(lecture_id_1, lecture_id_2)] = model.addVar(
             lb=0.0,
             vtype=GRB.CONTINUOUS,
-            name=f"{pair_var_name}_{lecture_id_1}_{lecture_id_2}",
+            name=f"z_{lecture_id_1}_{lecture_id_2}",
         )
 
     model.update()
@@ -1791,7 +1907,7 @@ def build_gurobi_linearized_model(
             for hall_id_1 in instance.compatibility[lecture_id_1]:
                 for hall_id_2 in instance.compatibility[lecture_id_2]:
                     model.addConstr(
-                        pair_vars[(lecture_id_1, lecture_id_2)]
+                        z_vars[(lecture_id_1, lecture_id_2)]
                         >= instance.distances[hall_id_1][hall_id_2]
                         * (x[(lecture_id_1, hall_id_1)] + x[(lecture_id_2, hall_id_2)] - 1),
                         name=f"link_{lecture_id_1}_{lecture_id_2}_{hall_id_1}_{hall_id_2}",
@@ -1811,7 +1927,7 @@ def build_gurobi_linearized_model(
                         if instance.distances[hall_id_1][hall_id] >= threshold_distance
                     ]
                     model.addConstr(
-                        pair_vars[(lecture_id_1, lecture_id_2)]
+                        z_vars[(lecture_id_1, lecture_id_2)]
                         >= common_count
                         * threshold_distance
                         * (
@@ -1836,7 +1952,7 @@ def build_gurobi_linearized_model(
                         if instance.distances[hall_id][hall_id_2] >= threshold_distance
                     ]
                     model.addConstr(
-                        pair_vars[(lecture_id_1, lecture_id_2)]
+                        z_vars[(lecture_id_1, lecture_id_2)]
                         >= common_count
                         * threshold_distance
                         * (
@@ -1869,7 +1985,7 @@ def build_gurobi_linearized_model(
                         )
                     ]
                     model.addConstr(
-                        pair_vars[(lecture_id_1, lecture_id_2)]
+                        z_vars[(lecture_id_1, lecture_id_2)]
                         >= common_count
                         * threshold_distance
                         * (
@@ -1883,12 +1999,12 @@ def build_gurobi_linearized_model(
     if cuts == 0:
         # Keep the pair weights in the objective to improve matrix scaling.
         objective_terms = [
-            common_count * pair_vars[(lecture_id_1, lecture_id_2)]
+            common_count * z_vars[(lecture_id_1, lecture_id_2)]
             for (lecture_id_1, lecture_id_2), common_count in instance.common_students.items()
         ]
     else:
         objective_terms = [
-            pair_vars[(lecture_id_1, lecture_id_2)]
+            z_vars[(lecture_id_1, lecture_id_2)]
             for (lecture_id_1, lecture_id_2) in instance.common_students
         ]
     objective_terms.extend(
@@ -1897,7 +2013,7 @@ def build_gurobi_linearized_model(
         for hall_id in instance.compatibility[lecture.lecture_id]
     )
     model.setObjective(quicksum(objective_terms), GRB.MINIMIZE)
-    return model, x, pair_vars, thread_limit
+    return model, x, z_vars, thread_limit
 
 
 def solve_gurobi_quadratic(
@@ -2167,6 +2283,7 @@ def solve_cp_sat(
     instance: Instance,
     time_limit: float,
     verbose: bool = True,
+    cuts: int = 1,
     cardinality: bool = False,
 ) -> dict[str, Any]:
     wall_start = time.perf_counter()
@@ -2186,10 +2303,10 @@ def solve_cp_sat(
             model.AddAllDifferent([hall_assignment[lecture_id] for lecture_id in active_lectures])
 
     if cardinality:
-        cuts = build_capacity_dominance_cuts(instance)
+        cardinality_cuts = build_capacity_dominance_cuts(instance)
         large_halls_by_threshold = {
             cut.threshold: set(cut.large_hall_ids)
-            for cut in cuts
+            for cut in cardinality_cuts
         }
         assigned_to_large_hall: dict[tuple[int, int], cp_model.IntVar] = {}
 
@@ -2208,7 +2325,7 @@ def solve_cp_sat(
             assigned_to_large_hall[key] = indicator
             return indicator
 
-        for cut in cuts:
+        for cut in cardinality_cuts:
             if not cut.eligible_lecture_ids:
                 if cut.rhs < 0:
                     model.AddBoolOr([])
@@ -2222,6 +2339,7 @@ def solve_cp_sat(
             )
 
     objective_terms: list[Any] = []
+    z_vars: dict[tuple[int, int], cp_model.IntVar] = {}
     for lecture in instance.lectures:
         compatible_penalties = instance.assignment_penalties[lecture.lecture_id]
         feasible_penalties = sorted(set(compatible_penalties.values()))
@@ -2246,21 +2364,30 @@ def solve_cp_sat(
                 for hall_id_2 in instance.compatibility[lecture_id_2]
             }
         )
-        distance_var = model.NewIntVar(
+        z_var = model.NewIntVar(
             feasible_distances[0],
             feasible_distances[-1],
             f"z_{lecture_id_1}_{lecture_id_2}",
         )
+        z_vars[(lecture_id_1, lecture_id_2)] = z_var
         tuples = [
             (hall_id_1, hall_id_2, instance.distances[hall_id_1][hall_id_2])
             for hall_id_1 in instance.compatibility[lecture_id_1]
             for hall_id_2 in instance.compatibility[lecture_id_2]
         ]
         model.AddAllowedAssignments(
-            [hall_assignment[lecture_id_1], hall_assignment[lecture_id_2], distance_var],
+            [hall_assignment[lecture_id_1], hall_assignment[lecture_id_2], z_var],
             tuples,
         )
-        objective_terms.append(common_count * distance_var)
+        objective_terms.append(common_count * z_var)
+
+    if cuts == 3 and z_vars:
+        add_cp_extended_strong_distance_propagation(
+            model=model,
+            instance=instance,
+            hall_assignment=hall_assignment,
+            z_vars=z_vars,
+        )
 
     model.Minimize(sum(objective_terms) if objective_terms else 0)
 
@@ -2295,6 +2422,7 @@ def solve_cp_sat(
         "solver_runtime_seconds": safe_float(solver.WallTime()),
         "mip_gap": None,
         "threads": thread_limit,
+        "cuts_mode": cuts,
         "error": None,
         "solution": assignment_details_from_map(instance, assignment_by_lecture),
     }
@@ -2915,12 +3043,15 @@ def main() -> None:
 
     for index, seed in enumerate(seeds):
         run_tag = f"{base_run_tag}_seed{seed}"
-        instance = build_instance(
-            num_halls=args.num_halls,
-            slots_per_day=args.slots_per_day,
-            seed=seed,
-            density=args.density,
-        )
+        try:
+            instance = build_instance(
+                num_halls=args.num_halls,
+                slots_per_day=args.slots_per_day,
+                seed=seed,
+                density=args.density,
+            )
+        except ValueError as error:
+            raise SystemExit(str(error))
         instance, preprocessing_infeasible = apply_compatibility_preprocessing(
             instance,
             mode=args.compatibility_preprocess,
@@ -2963,6 +3094,7 @@ def main() -> None:
                     instance,
                     args.time_limit,
                     verbose=not args.quiet,
+                    cuts=args.cuts,
                     cardinality=args.cardinality,
                 ),
             ]
@@ -2991,6 +3123,7 @@ def main() -> None:
                     instance,
                     args.time_limit,
                     verbose=not args.quiet,
+                    cuts=args.cuts,
                     cardinality=args.cardinality,
                 ),
             ]

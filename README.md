@@ -125,12 +125,14 @@ python lecture_hall_experiment.py \
 - `--slots-per-day`: number of discrete slots in the day. Default: `12`.
 - `--seed`: one seed, a closed range such as `1-100`, or a start-step-end pattern such as `1-3-10`. Default: `0`.
 - `--density`: target lecture-slot utilization, interpreted as total lecture slots divided by total available hall-slots in the day. Default: `0.9`.
+  - The synthetic generator also enforces the cohort-overlap rules used to create student flows. With the current `8 x 4 = 32` subject-year cohorts, at most `64` lectures can run simultaneously, so very high densities become infeasible once `num_halls > 64`.
 - `--time-limit`: per-solver time limit in seconds. Default: `60`.
-- `--cuts {0,1,2,3}`: cut mode for the linearized GUROBI model.
+- `--cuts {0,1,2,3}`: pair-distance cut mode.
   - `0`: base compact linking constraints only.
   - `1`: strong compact linking constraints only.
   - `2`: strong compact linking constraints plus the symmetric strong family.
   - `3`: one-sided extended strong cuts that enlarge the original strong family on the `l1` side.
+  - In the `CP` model, mode `3` also activates a redundant propagation layer analogous to the extended strong cut; modes `0`-`2` do not change the CP formulation.
 - `--cardinality`: enable the capacity-dominance cardinality constraints derived from maximal overlap cliques and hall-capacity thresholds.
   - Disabled by default.
   - Applies to `MIPQ`, `MIP`, `CP`, and `ROOT`.
