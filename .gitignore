@@ -9,6 +9,7 @@ __pycache__/
 # Results files
 *.xlsx
 *.json
+Quadratic Lecture Hall Assignment Problem.zip
 
 # LaTeX build artifacts
 *.aux
