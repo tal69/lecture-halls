@@ -99,8 +99,18 @@ def parse_args() -> argparse.Namespace:
         "--itc-week-index",
         dest="itc_week_index",
         type=int,
-        default=0,
-        help="0-based week index for ITC 2019. Default: 0.",
+        default=None,
+        help="Optional 0-based week index for ITC 2019. When omitted, the first substantial teaching week is selected.",
+    )
+    parser.add_argument(
+        "--itc-short-break-slots",
+        dest="itc_short_break_slots",
+        type=int,
+        default=None,
+        help=(
+            "Optional successor gap threshold in raw ITC slots. When omitted, the importer infers a short-break "
+            "threshold automatically from student transitions."
+        ),
     )
     parser.add_argument(
         "--time-limit",
@@ -208,10 +218,12 @@ def validate_args(args: argparse.Namespace) -> None:
     else:
         if not args.itc_instance:
             raise SystemExit("--itc-instance is required when --source itc2019 is used.")
-        if args.itc_week_index < 0:
+        if args.itc_week_index is not None and args.itc_week_index < 0:
             raise SystemExit("--itc-week-index must be nonnegative.")
         if args.itc_day is not None and args.itc_day < 0:
             raise SystemExit("--itc-day must be nonnegative.")
+        if args.itc_short_break_slots is not None and args.itc_short_break_slots < 0:
+            raise SystemExit("--itc-short-break-slots must be nonnegative.")
     if args.time_limit <= 0:
         raise SystemExit("--time-limit must be positive.")
     if args.model is not None:
@@ -1428,18 +1440,18 @@ def build_summary_rows(
     sizes = [lecture.students for lecture in instance.lectures]
     capacities = [hall.capacity for hall in instance.halls]
     common_values = list(instance.common_students.values())
+    peak_active_lectures = max(
+        (len(active_lectures) for active_lectures in instance.active_lectures_by_slot.values()),
+        default=0,
+    )
+    peak_slot_density = peak_active_lectures / instance.num_halls if instance.num_halls else 0.0
     assignment_penalty_values = [
         penalty
         for hall_penalties in instance.assignment_penalties.values()
         for penalty in hall_penalties.values()
     ]
     decomposition_connected_components = count_decomposition_connected_components(instance)
-    candidate_successors = sum(
-        1
-        for lecture in instance.lectures
-        for follower in instance.lectures
-        if lecture.day == follower.day and lecture.end_slot == follower.start_slot
-    )
+    candidate_successors = count_candidate_successor_pairs(instance)
 
     try:
         script_path = Path(__file__)
@@ -1508,6 +1520,11 @@ def build_summary_rows(
                 "time_horizon_slots": instance.days_per_week * instance.slots_per_day,
                 "density_target": instance.density_target,
                 "density_actual": instance.density_actual,
+                "raw_slot_minutes": instance.raw_slot_minutes,
+                "selected_week_index": instance.selected_week_index,
+                "week_selection_mode": instance.week_selection_mode,
+                "peak_active_lectures": peak_active_lectures,
+                "peak_slot_density": peak_slot_density,
                 "free_waste_ratio": FREE_WASTE_RATIO,
                 "time_limit_seconds": time_limit,
                 "linearized_cuts": cuts_mode,
@@ -1544,6 +1561,14 @@ def build_summary_rows(
                 "positive_assignment_penalty_entries": sum(
                     1 for penalty in assignment_penalty_values if penalty > 0
                 ),
+                "assignment_penalty_type": instance.assignment_penalty_type,
+                "successor_max_gap_slots": instance.successor_max_gap_slots,
+                "successor_max_gap_minutes": instance.successor_max_gap_minutes,
+                "successor_gap_inference_mode": instance.successor_gap_inference_mode,
+                "fixed_input_time_penalty": instance.fixed_input_time_penalty,
+                "fixed_input_time_weight": instance.fixed_input_time_weight,
+                "fixed_input_weighted_time_penalty": instance.fixed_input_weighted_time_penalty,
+                "fixed_input_time_penalty_allocation": instance.fixed_input_time_penalty_allocation,
                 "solver_family": result["solver_family"],
                 "formulation": result["formulation"],
                 "status": result["status"],
@@ -1602,6 +1627,16 @@ def last_header_row(worksheet: Any, first_header_cell: str) -> list[Any] | None:
     return None
 
 
+def count_candidate_successor_pairs(instance: Instance) -> int:
+    return sum(
+        1
+        for lecture in instance.lectures
+        for follower in instance.lectures
+        if lecture.day == follower.day
+        and 0 <= follower.start_slot - lecture.end_slot <= instance.successor_max_gap_slots
+    )
+
+
 def unique_sheet_name(workbook: Workbook, base_name: str) -> str:
     candidate = base_name[:31]
     if candidate not in workbook.sheetnames:
@@ -1642,6 +1677,18 @@ def append_summary_sheet(workbook: Workbook, summary_df: pd.DataFrame) -> None:
 
 
 def instance_to_json_dict(instance: Instance) -> dict[str, Any]:
+    peak_active_lectures = max(
+        (len(active_lectures) for active_lectures in instance.active_lectures_by_slot.values()),
+        default=0,
+    )
+    peak_slot_density = peak_active_lectures / instance.num_halls if instance.num_halls else 0.0
+    if instance.assignment_penalty_type == "itc2019_room_penalty":
+        assignment_penalty = {"type": "itc2019_room_penalty"}
+    else:
+        assignment_penalty = {
+            "type": "quadratic_wasted_space",
+            "free_waste_ratio": FREE_WASTE_RATIO,
+        }
     return {
         "seed": instance.seed,
         "instance_name": instance.instance_name,
@@ -1651,9 +1698,22 @@ def instance_to_json_dict(instance: Instance) -> dict[str, Any]:
         "days_per_week": instance.days_per_week,
         "density_target": instance.density_target,
         "density_actual": instance.density_actual,
-        "assignment_penalty": {
-            "type": "quadratic_wasted_space",
-            "free_waste_ratio": FREE_WASTE_RATIO,
+        "raw_slot_minutes": instance.raw_slot_minutes,
+        "selected_week_index": instance.selected_week_index,
+        "week_selection_mode": instance.week_selection_mode,
+        "peak_active_lectures": peak_active_lectures,
+        "peak_slot_density": peak_slot_density,
+        "successor_rule": {
+            "max_gap_slots": instance.successor_max_gap_slots,
+            "max_gap_minutes": instance.successor_max_gap_minutes,
+            "inference_mode": instance.successor_gap_inference_mode,
+        },
+        "assignment_penalty": assignment_penalty,
+        "fixed_input_penalties": {
+            "time_penalty": instance.fixed_input_time_penalty,
+            "time_weight": instance.fixed_input_time_weight,
+            "weighted_time_penalty": instance.fixed_input_weighted_time_penalty,
+            "time_penalty_allocation": instance.fixed_input_time_penalty_allocation,
         },
         "compatibility_preprocessing": {
             "mode": instance.compatibility_preprocess_mode,
@@ -1820,12 +1880,12 @@ def print_instance_console_view(instance: Instance, json_path: Path) -> None:
     hall_map = {hall.hall_id: hall for hall in instance.halls}
     lecture_map = {lecture.lecture_id: lecture for lecture in instance.lectures}
     total_common_students = sum(instance.common_students.values())
-    candidate_successors = sum(
-        1
-        for lecture in instance.lectures
-        for follower in instance.lectures
-        if lecture.day == follower.day and lecture.end_slot == follower.start_slot
+    peak_active_lectures = max(
+        (len(active_lectures) for active_lectures in instance.active_lectures_by_slot.values()),
+        default=0,
     )
+    peak_slot_density = peak_active_lectures / instance.num_halls if instance.num_halls else 0.0
+    candidate_successors = count_candidate_successor_pairs(instance)
     min_compatibility = min(len(halls) for halls in instance.compatibility.values()) if instance.compatibility else 0
     max_distance = max(max(row) for row in instance.distances) if instance.distances else 0
     max_assignment_penalty = max(
@@ -1847,20 +1907,39 @@ def print_instance_console_view(instance: Instance, json_path: Path) -> None:
         "Overview: "
         f"halls={instance.num_halls}, lectures={len(instance.lectures)}, "
         f"slots/day={instance.slots_per_day}, density={instance.density_actual:.3f} "
-        f"(target {instance.density_target:.3f})"
+        f"(target {instance.density_target:.3f}), peak slot density={peak_slot_density:.3f}"
     )
+    if instance.raw_slot_minutes > 0:
+        print(
+            "ITC timing: "
+            f"raw slot={instance.raw_slot_minutes:.3f} minutes, "
+            f"selected week={instance.selected_week_index + 1} ({instance.week_selection_mode}), "
+            f"successor gap <= {instance.successor_max_gap_slots} slots "
+            f"({instance.successor_max_gap_minutes:.3f} minutes, {instance.successor_gap_inference_mode})"
+        )
     print(
         "Structure: "
         f"successor pairs={len(instance.common_students)}/{candidate_successors}, "
         f"total common students={total_common_students}, "
         f"min compatible halls per lecture={min_compatibility}, max distance={max_distance}, "
-        f"max assignment penalty={max_assignment_penalty}"
+        f"max assignment penalty={max_assignment_penalty}, peak active lectures={peak_active_lectures}"
     )
-    print(
-        "Penalty: "
-        f"wasted space is free up to {FREE_WASTE_RATIO:.0%} of hall capacity; "
-        "beyond that, the excess empty seats are penalized quadratically."
-    )
+    if instance.assignment_penalty_type == "itc2019_room_penalty":
+        print("Penalty: assignment penalties are the ITC 2019 class-room penalties from the instance XML.")
+    else:
+        print(
+            "Penalty: "
+            f"wasted space is free up to {FREE_WASTE_RATIO:.0%} of hall capacity; "
+            "beyond that, the excess empty seats are penalized quadratically."
+        )
+    if instance.fixed_input_time_penalty != 0 or instance.fixed_input_time_weight != 0:
+        print(
+            "Fixed input time penalty: "
+            f"raw={instance.fixed_input_time_penalty:.6g}, "
+            f"weight={instance.fixed_input_time_weight}, "
+            f"weighted={instance.fixed_input_weighted_time_penalty:.6g}, "
+            f"allocation={instance.fixed_input_time_penalty_allocation}"
+        )
     if instance.compatibility_preprocess_mode != "none":
         removed_entries = instance.compatibility_entries_before - instance.compatibility_entries_after
         print(
@@ -2011,6 +2090,7 @@ def load_run_instances(args: argparse.Namespace) -> list[tuple[str, Instance]]:
             solution=args.itc_solution,
             week_index=args.itc_week_index,
             source_day=args.itc_day,
+            short_break_slots=args.itc_short_break_slots,
         )
     except ValueError as error:
         raise SystemExit(str(error))

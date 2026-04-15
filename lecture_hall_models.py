@@ -56,6 +56,17 @@ class Instance:
     compatibility_preprocess_tightened_lectures: int = 0
     compatibility_preprocess_optimal_subproblems: int = 0
     compatibility_preprocess_nonoptimal_subproblems: int = 0
+    assignment_penalty_type: str = "quadratic_wasted_space"
+    fixed_input_time_penalty: float = 0.0
+    fixed_input_time_weight: int = 0
+    fixed_input_weighted_time_penalty: float = 0.0
+    fixed_input_time_penalty_allocation: str = "none"
+    raw_slot_minutes: float = 0.0
+    selected_week_index: int = 0
+    week_selection_mode: str = "explicit"
+    successor_max_gap_slots: int = 0
+    successor_max_gap_minutes: float = 0.0
+    successor_gap_inference_mode: str = "exact"
 
 
 @dataclass(frozen=True)

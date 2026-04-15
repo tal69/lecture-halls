@@ -71,8 +71,20 @@ def build_instance_from_components(
     slots_per_day: int,
     days_per_week: int,
     density_target: float | None = None,
+    assignment_penalties: dict[int, dict[int, int]] | None = None,
+    assignment_penalty_type: str = "quadratic_wasted_space",
+    fixed_input_time_penalty: float = 0.0,
+    fixed_input_time_weight: int = 0,
+    fixed_input_time_penalty_allocation: str = "none",
+    raw_slot_minutes: float = 0.0,
+    selected_week_index: int = 0,
+    week_selection_mode: str = "explicit",
+    successor_max_gap_slots: int = 0,
+    successor_max_gap_minutes: float = 0.0,
+    successor_gap_inference_mode: str = "exact",
 ) -> Instance:
-    assignment_penalties = build_assignment_penalties(lectures, halls, compatibility)
+    if assignment_penalties is None:
+        assignment_penalties = build_assignment_penalties(lectures, halls, compatibility)
     active_lectures_by_slot = build_active_lectures_by_slot(lectures, days_per_week, slots_per_day)
     total_lecture_length = sum(lecture.duration for lecture in lectures)
     total_capacity = len(halls) * days_per_week * slots_per_day
@@ -102,4 +114,15 @@ def build_instance_from_components(
         compatibility_preprocess_tightened_lectures=0,
         compatibility_preprocess_optimal_subproblems=0,
         compatibility_preprocess_nonoptimal_subproblems=0,
+        assignment_penalty_type=assignment_penalty_type,
+        fixed_input_time_penalty=fixed_input_time_penalty,
+        fixed_input_time_weight=fixed_input_time_weight,
+        fixed_input_weighted_time_penalty=fixed_input_time_penalty * fixed_input_time_weight,
+        fixed_input_time_penalty_allocation=fixed_input_time_penalty_allocation,
+        raw_slot_minutes=raw_slot_minutes,
+        selected_week_index=selected_week_index,
+        week_selection_mode=week_selection_mode,
+        successor_max_gap_slots=successor_max_gap_slots,
+        successor_max_gap_minutes=successor_max_gap_minutes,
+        successor_gap_inference_mode=successor_gap_inference_mode,
     )
