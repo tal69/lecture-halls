@@ -63,14 +63,14 @@ After the student-journey simulation, each lecture size is tightened toward the 
 ## ITC 2019 Real-World Instances
 
 The script now natively supports loading real-world XML instances from the International Timetabling Competition (ITC 2019).
-- **Day Extraction**: Extracts a specific day of a specific week to retain the single-day focus. It infers the first substantial teaching week automatically if not specified.
+- **Day Extraction**: Extracts a specific day of a specific week to retain the single-day focus. It infers the most loaded teaching week automatically if not specified.
 - **Student Flow Inference**: Maps class-student records to construct consecutive pair distances based on a "short break" threshold (inferred from the student timetable or manually configured).
 - **Capacity Fix**: Automatically handles capacity adjustments when the ITC solution assigned a class to a room strictly smaller than the student count by reducing the student count strictly for those anomalies.
 - **Penalties**: Incorporates the exact room-assignment penalties provided in the original ITC 2019 XML models instead of the synthetic wasted-space penalty.
 
-The repository also supports a Lancaster-specific bridge for `lancs-yr23.xml`.
+The repository also supports a Lancaster-specific data-transformation path for `lancs-yr23.xml`.
 - It merges `SameClass` components into representative activities.
-- It selects the first substantial week of each of the two main teaching terms.
+- It selects the peak-load week of each of the two main teaching terms.
 - It greedily repairs student registrations subject to merged weekly timetable feasibility and hidden-room capacities.
 - It then exposes the resulting single-day room-assignment instances directly to `lecture_hall_experiment.py`.
 
@@ -164,7 +164,7 @@ python lecture_hall_experiment.py \
   - Optional for `lancs_yr23`; when omitted it defaults to `ITC2019/lancs-yr23.xml`.
 - `--itc-solution`: Optional ITC 2019 solution XML path.
 - `--itc-week-index`: Optional 0-based week index for ITC 2019.
-  - Not used by `lancs_yr23` because that bridge auto-selects one substantial week per term.
+  - Not used by `lancs_yr23` because that data-transformation path auto-selects one peak-load week per term.
 - `--itc-day`: Optional 0-based source day index for ITC 2019. Loads all if omitted.
 - `--itc-short-break-slots`: Optional successor gap threshold for ITC 2019. Inferred automatically if omitted.
 - `--no-capacity-fix`: Disable the default ITC capacity fix that reduces oversized lectures to their assigned room capacity.

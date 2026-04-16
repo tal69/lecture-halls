@@ -101,7 +101,7 @@ def parse_args() -> argparse.Namespace:
         dest="itc_week_index",
         type=int,
         default=None,
-        help="Optional 0-based week index for ITC 2019. When omitted, the first substantial teaching week is selected.",
+        help="Optional 0-based week index for ITC 2019. When omitted, the most loaded teaching week is selected.",
     )
     parser.add_argument(
         "--itc-short-break-slots",
@@ -295,11 +295,9 @@ def gurobi_thread_limit() -> int:
 
 def build_overlap_neighbors(instance: Instance) -> dict[int, set[int]]:
     neighbors = {lecture.lecture_id: set() for lecture in instance.lectures}
-    for active_lectures in instance.active_lectures_by_slot.values():
-        if len(active_lectures) <= 1:
-            continue
-        for index, lecture_id_1 in enumerate(active_lectures):
-            for lecture_id_2 in active_lectures[index + 1 :]:
+    for _, clique_lecture_ids in build_maximal_active_cliques(instance):
+        for index, lecture_id_1 in enumerate(clique_lecture_ids):
+            for lecture_id_2 in clique_lecture_ids[index + 1 :]:
                 neighbors[lecture_id_1].add(lecture_id_2)
                 neighbors[lecture_id_2].add(lecture_id_1)
     return neighbors
@@ -458,6 +456,7 @@ def cp_sat_capacity_upper_bound(
     target_lecture_id: int,
     lecture_subset: list[int],
     num_search_workers: int,
+    overlap_cliques: list[tuple[int, ...]] | None = None,
 ) -> tuple[int | None, str]:
     model = cp_model.CpModel()
     lecture_subset_set = set(lecture_subset)
@@ -472,10 +471,12 @@ def cp_sat_capacity_upper_bound(
             f"pre_a_{lecture_id}",
         )
 
-    for active_lectures in instance.active_lectures_by_slot.values():
-        scoped_active_lectures = [lecture_id for lecture_id in active_lectures if lecture_id in lecture_subset_set]
-        if len(scoped_active_lectures) > 1:
-            model.AddAllDifferent([hall_assignment[lecture_id] for lecture_id in scoped_active_lectures])
+    if overlap_cliques is None:
+        overlap_cliques = [clique_lecture_ids for _, clique_lecture_ids in build_maximal_active_cliques(instance)]
+    for clique_lecture_ids in overlap_cliques:
+        scoped_clique = [lecture_id for lecture_id in clique_lecture_ids if lecture_id in lecture_subset_set]
+        if len(scoped_clique) > 1:
+            model.AddAllDifferent([hall_assignment[lecture_id] for lecture_id in scoped_clique])
 
     hall_capacity_by_id = {hall.hall_id: hall.capacity for hall in instance.halls}
     compatible_capacities = [
@@ -541,6 +542,7 @@ def apply_compatibility_preprocessing(
         )
 
     overlap_neighbors = build_overlap_neighbors(instance)
+    overlap_cliques = [clique_lecture_ids for _, clique_lecture_ids in build_maximal_active_cliques(instance)]
     compatibility = {
         lecture_id: list(hall_ids)
         for lecture_id, hall_ids in instance.compatibility.items()
@@ -572,6 +574,7 @@ def apply_compatibility_preprocessing(
                 target_lecture_id=lecture_id,
                 lecture_subset=lecture_subset,
                 num_search_workers=thread_limit,
+                overlap_cliques=overlap_cliques,
             )
             total_subproblems += 1
             if status_name == "OPTIMAL":
@@ -640,11 +643,9 @@ def count_decomposition_connected_components(instance: Instance) -> int:
         adjacency[lecture_id_2].add(lecture_id_1)
 
     # Overlap edges induce room-competition coupling.
-    for active_lectures in instance.active_lectures_by_slot.values():
-        if len(active_lectures) <= 1:
-            continue
-        for index, lecture_id_1 in enumerate(active_lectures):
-            for lecture_id_2 in active_lectures[index + 1 :]:
+    for _, clique_lecture_ids in build_maximal_active_cliques(instance):
+        for index, lecture_id_1 in enumerate(clique_lecture_ids):
+            for lecture_id_2 in clique_lecture_ids[index + 1 :]:
                 adjacency[lecture_id_1].add(lecture_id_2)
                 adjacency[lecture_id_2].add(lecture_id_1)
 
@@ -708,6 +709,24 @@ def status_name_from_cp_sat(status_code: int) -> str:
         cp_model.UNKNOWN: "UNKNOWN",
     }
     return mapping.get(status_code, f"STATUS_{status_code}")
+
+
+MODEL_CONSTRUCTION_TIMING_FIELDS = (
+    "model_construction_wall_seconds",
+    "variable_creation_wall_seconds",
+    "assignment_constraints_wall_seconds",
+    "overlap_constraints_wall_seconds",
+    "distance_cut_generation_wall_seconds",
+    "cardinality_cut_generation_wall_seconds",
+    "cardinality_constraints_wall_seconds",
+    "same_room_constraints_wall_seconds",
+    "same_attendees_constraints_wall_seconds",
+    "objective_construction_wall_seconds",
+)
+
+
+def empty_model_construction_timings() -> dict[str, float]:
+    return {field: 0.0 for field in MODEL_CONSTRUCTION_TIMING_FIELDS}
 
 
 def same_attendees_pair_violated(
@@ -955,6 +974,7 @@ def add_gurobi_same_room_constraints(
     model: Model,
     instance: Instance,
     x: dict[tuple[int, int], Any],
+    linearize_soft: bool = True,
 ) -> list[Any]:
     soft_penalty_terms: list[Any] = []
 
@@ -979,6 +999,9 @@ def add_gurobi_same_room_constraints(
                 x[(lecture_id_2, hall_id)] == 0,
                 name=f"hard_same_room_l2only_{lecture_id_1}_{lecture_id_2}_{hall_id}",
             )
+
+    if not linearize_soft:
+        return soft_penalty_terms
 
     for soft_pair in instance.soft_same_room_pairs:
         lecture_id_1 = soft_pair.lecture_id_1
@@ -1019,6 +1042,7 @@ def add_gurobi_same_attendees_constraints(
     instance: Instance,
     x: dict[tuple[int, int], Any],
     use_strong_aggregation: bool = False,
+    linearize_soft: bool = True,
 ) -> list[Any]:
     soft_penalty_terms: list[Any] = []
 
@@ -1048,6 +1072,9 @@ def add_gurobi_same_attendees_constraints(
                         f"_{len(hall_subset_1)}_{len(hall_subset_2)}"
                     ),
                 )
+
+    if not linearize_soft:
+        return soft_penalty_terms
 
     for soft_pair in instance.soft_same_attendees_pairs:
         forbidden_pairs = same_attendees_forbidden_hall_pairs(
@@ -1088,6 +1115,52 @@ def add_gurobi_same_attendees_constraints(
         soft_penalty_terms.append(soft_pair.penalty * violation_var)
 
     return soft_penalty_terms
+
+
+def quadratic_same_room_penalty_terms(
+    instance: Instance,
+    x: dict[tuple[int, int], Any],
+) -> list[Any]:
+    penalty_terms: list[Any] = []
+
+    for soft_pair in instance.soft_same_room_pairs:
+        lecture_id_1 = soft_pair.lecture_id_1
+        lecture_id_2 = soft_pair.lecture_id_2
+        common_halls = sorted(
+            set(instance.compatibility[lecture_id_1]) & set(instance.compatibility[lecture_id_2])
+        )
+        same_room_indicator = quicksum(
+            x[(lecture_id_1, hall_id)] * x[(lecture_id_2, hall_id)]
+            for hall_id in common_halls
+        )
+        penalty_terms.append(soft_pair.penalty * (1 - same_room_indicator))
+
+    return penalty_terms
+
+
+def quadratic_same_attendees_penalty_terms(
+    instance: Instance,
+    x: dict[tuple[int, int], Any],
+) -> list[Any]:
+    penalty_terms: list[Any] = []
+
+    for soft_pair in instance.soft_same_attendees_pairs:
+        forbidden_pairs = same_attendees_forbidden_hall_pairs(
+            instance,
+            soft_pair.lecture_id_1,
+            soft_pair.lecture_id_2,
+        )
+        if not forbidden_pairs:
+            continue
+        penalty_terms.append(
+            soft_pair.penalty
+            * quicksum(
+                x[(soft_pair.lecture_id_1, hall_id_1)] * x[(soft_pair.lecture_id_2, hall_id_2)]
+                for hall_id_1, hall_id_2 in forbidden_pairs
+            )
+        )
+
+    return penalty_terms
 
 
 def add_cp_same_room_constraints(
@@ -1205,8 +1278,10 @@ def build_gurobi_linearized_model(
     verbose: bool,
     cardinality: bool = False,
     threads: int | None = None,
-) -> tuple[Model, dict[tuple[int, int], Any], dict[tuple[int, int], Any], int]:
+) -> tuple[Model, dict[tuple[int, int], Any], dict[tuple[int, int], Any], int, dict[str, float]]:
     thread_limit = gurobi_thread_limit() if threads is None else threads
+    construction_timings = empty_model_construction_timings()
+    construction_start = time.perf_counter()
     model = Model("lecture_hall_linearized")
     model.Params.OutputFlag = 1 if verbose else 0
     if time_limit is not None:
@@ -1223,6 +1298,7 @@ def build_gurobi_linearized_model(
     # weight is folded into the strengthened linear inequalities for scaling.
     z_vars: dict[tuple[int, int], Any] = {}
 
+    block_start = time.perf_counter()
     for lecture in instance.lectures:
         for hall_id in instance.compatibility[lecture.lecture_id]:
             x[(lecture.lecture_id, hall_id)] = model.addVar(
@@ -1236,7 +1312,9 @@ def build_gurobi_linearized_model(
             vtype=GRB.CONTINUOUS,
             name=f"z_{lecture_id_1}_{lecture_id_2}",
         )
+    construction_timings["variable_creation_wall_seconds"] = time.perf_counter() - block_start
 
+    block_start = time.perf_counter()
     model.update()
 
     for lecture in instance.lectures:
@@ -1248,24 +1326,32 @@ def build_gurobi_linearized_model(
             == 1,
             name=f"assign_{lecture.lecture_id}",
         )
+    construction_timings["assignment_constraints_wall_seconds"] = time.perf_counter() - block_start
 
-    for slot, active_lectures in instance.active_lectures_by_slot.items():
-        if len(active_lectures) <= 1:
-            continue
+    block_start = time.perf_counter()
+    for clique_index, (day, clique_lecture_ids) in enumerate(build_maximal_active_cliques(instance)):
         for hall in instance.halls:
-            vars_for_slot = [
+            vars_for_clique = [
                 x[(lecture_id, hall.hall_id)]
-                for lecture_id in active_lectures
+                for lecture_id in clique_lecture_ids
                 if (lecture_id, hall.hall_id) in x
             ]
-            if len(vars_for_slot) > 1:
+            if len(vars_for_clique) > 1:
                 model.addConstr(
-                    quicksum(vars_for_slot) <= 1,
-                    name=f"overlap_h{hall.hall_id}_t{slot}",
+                    quicksum(vars_for_clique) <= 1,
+                    name=f"overlap_h{hall.hall_id}_d{day}_c{clique_index}",
                 )
+    construction_timings["overlap_constraints_wall_seconds"] = time.perf_counter() - block_start
 
     if cardinality:
-        for cut in build_capacity_dominance_cuts(instance):
+        block_start = time.perf_counter()
+        cardinality_cuts = build_capacity_dominance_cuts(instance)
+        construction_timings["cardinality_cut_generation_wall_seconds"] = (
+            time.perf_counter() - block_start
+        )
+
+        block_start = time.perf_counter()
+        for cut in cardinality_cuts:
             expr = quicksum(
                 x[(lecture_id, hall_id)]
                 for lecture_id in cut.eligible_lecture_ids
@@ -1276,15 +1362,26 @@ def build_gurobi_linearized_model(
                 expr <= cut.rhs,
                 name=f"card_d{cut.day}_c{cut.clique_index}_k{cut.threshold}",
             )
+        construction_timings["cardinality_constraints_wall_seconds"] = (
+            time.perf_counter() - block_start
+        )
 
+    block_start = time.perf_counter()
     same_room_penalty_terms = add_gurobi_same_room_constraints(model, instance, x)
+    construction_timings["same_room_constraints_wall_seconds"] = time.perf_counter() - block_start
+
+    block_start = time.perf_counter()
     same_attendees_penalty_terms = add_gurobi_same_attendees_constraints(
         model,
         instance,
         x,
         use_strong_aggregation=(cuts == 3),
     )
+    construction_timings["same_attendees_constraints_wall_seconds"] = (
+        time.perf_counter() - block_start
+    )
 
+    block_start = time.perf_counter()
     if cuts == 0:
         for lecture_id_1, lecture_id_2 in instance.common_students:
             for hall_id_1 in instance.compatibility[lecture_id_1]:
@@ -1378,7 +1475,9 @@ def build_gurobi_linearized_model(
                         ),
                         name=f"strongext_{lecture_id_1}_{lecture_id_2}_{hall_id_1}_{hall_id_2}",
                     )
+    construction_timings["distance_cut_generation_wall_seconds"] = time.perf_counter() - block_start
 
+    block_start = time.perf_counter()
     if cuts == 0:
         # Keep the pair weights in the objective to improve matrix scaling.
         objective_terms = [
@@ -1398,18 +1497,23 @@ def build_gurobi_linearized_model(
     objective_terms.extend(same_room_penalty_terms)
     objective_terms.extend(same_attendees_penalty_terms)
     model.setObjective(quicksum(objective_terms), GRB.MINIMIZE)
-    return model, x, z_vars, thread_limit
+    construction_timings["objective_construction_wall_seconds"] = time.perf_counter() - block_start
+    construction_timings["model_construction_wall_seconds"] = time.perf_counter() - construction_start
+    return model, x, z_vars, thread_limit, construction_timings
 
 
 def solve_gurobi_quadratic(
     instance: Instance,
     time_limit: float,
+    cuts: int = 1,
     verbose: bool = True,
     cardinality: bool = False,
 ) -> dict[str, Any]:
     wall_start = time.perf_counter()
     thread_limit = gurobi_thread_limit()
+    construction_timings = empty_model_construction_timings()
     try:
+        construction_start = time.perf_counter()
         model = Model("lecture_hall_quadratic")
         model.Params.OutputFlag = 1 if verbose else 0
         model.Params.TimeLimit = time_limit
@@ -1417,13 +1521,16 @@ def solve_gurobi_quadratic(
         model.Params.NonConvex = 2
 
         x: dict[tuple[int, int], Any] = {}
+        block_start = time.perf_counter()
         for lecture in instance.lectures:
             for hall_id in instance.compatibility[lecture.lecture_id]:
                 x[(lecture.lecture_id, hall_id)] = model.addVar(
                     vtype=GRB.BINARY,
                     name=f"x_{lecture.lecture_id}_{hall_id}",
                 )
+        construction_timings["variable_creation_wall_seconds"] = time.perf_counter() - block_start
 
+        block_start = time.perf_counter()
         model.update()
 
         for lecture in instance.lectures:
@@ -1435,24 +1542,32 @@ def solve_gurobi_quadratic(
                 == 1,
                 name=f"assign_{lecture.lecture_id}",
             )
+        construction_timings["assignment_constraints_wall_seconds"] = time.perf_counter() - block_start
 
-        for slot, active_lectures in instance.active_lectures_by_slot.items():
-            if len(active_lectures) <= 1:
-                continue
+        block_start = time.perf_counter()
+        for clique_index, (day, clique_lecture_ids) in enumerate(build_maximal_active_cliques(instance)):
             for hall in instance.halls:
-                vars_for_slot = [
+                vars_for_clique = [
                     x[(lecture_id, hall.hall_id)]
-                    for lecture_id in active_lectures
+                    for lecture_id in clique_lecture_ids
                     if (lecture_id, hall.hall_id) in x
                 ]
-                if len(vars_for_slot) > 1:
+                if len(vars_for_clique) > 1:
                     model.addConstr(
-                        quicksum(vars_for_slot) <= 1,
-                        name=f"overlap_h{hall.hall_id}_t{slot}",
+                        quicksum(vars_for_clique) <= 1,
+                        name=f"overlap_h{hall.hall_id}_d{day}_c{clique_index}",
                     )
+        construction_timings["overlap_constraints_wall_seconds"] = time.perf_counter() - block_start
 
         if cardinality:
-            for cut in build_capacity_dominance_cuts(instance):
+            block_start = time.perf_counter()
+            cardinality_cuts = build_capacity_dominance_cuts(instance)
+            construction_timings["cardinality_cut_generation_wall_seconds"] = (
+                time.perf_counter() - block_start
+            )
+
+            block_start = time.perf_counter()
+            for cut in cardinality_cuts:
                 expr = quicksum(
                     x[(lecture_id, hall_id)]
                     for lecture_id in cut.eligible_lecture_ids
@@ -1463,10 +1578,34 @@ def solve_gurobi_quadratic(
                     expr <= cut.rhs,
                     name=f"card_d{cut.day}_c{cut.clique_index}_k{cut.threshold}",
                 )
+            construction_timings["cardinality_constraints_wall_seconds"] = (
+                time.perf_counter() - block_start
+            )
 
-        same_room_penalty_terms = add_gurobi_same_room_constraints(model, instance, x)
-        same_attendees_penalty_terms = add_gurobi_same_attendees_constraints(model, instance, x)
+        block_start = time.perf_counter()
+        add_gurobi_same_room_constraints(
+            model,
+            instance,
+            x,
+            linearize_soft=False,
+        )
+        construction_timings["same_room_constraints_wall_seconds"] = (
+            time.perf_counter() - block_start
+        )
 
+        block_start = time.perf_counter()
+        add_gurobi_same_attendees_constraints(
+            model,
+            instance,
+            x,
+            use_strong_aggregation=(cuts == 3),
+            linearize_soft=False,
+        )
+        construction_timings["same_attendees_constraints_wall_seconds"] = (
+            time.perf_counter() - block_start
+        )
+
+        block_start = time.perf_counter()
         objective_terms = []
         for (lecture_id_1, lecture_id_2), common_count in instance.common_students.items():
             for hall_id_1 in instance.compatibility[lecture_id_1]:
@@ -1483,9 +1622,11 @@ def solve_gurobi_quadratic(
             for lecture in instance.lectures
             for hall_id in instance.compatibility[lecture.lecture_id]
         )
-        objective_terms.extend(same_room_penalty_terms)
-        objective_terms.extend(same_attendees_penalty_terms)
+        objective_terms.extend(quadratic_same_room_penalty_terms(instance, x))
+        objective_terms.extend(quadratic_same_attendees_penalty_terms(instance, x))
         model.setObjective(quicksum(objective_terms), GRB.MINIMIZE)
+        construction_timings["objective_construction_wall_seconds"] = time.perf_counter() - block_start
+        construction_timings["model_construction_wall_seconds"] = time.perf_counter() - construction_start
         model.optimize()
 
         if model.Status == GRB.INTERRUPTED:
@@ -1512,8 +1653,10 @@ def solve_gurobi_quadratic(
             "solver_runtime_seconds": safe_float(model.Runtime),
             "mip_gap": safe_float(model.MIPGap) if model.SolCount > 0 else None,
             "threads": thread_limit,
+            "cuts_mode": cuts,
             "error": None,
             "solution": assignment_details_from_map(instance, assignment_by_lecture),
+            **construction_timings,
         }
     except GurobiError as error:
         return {
@@ -1526,8 +1669,10 @@ def solve_gurobi_quadratic(
             "solver_runtime_seconds": None,
             "mip_gap": None,
             "threads": thread_limit,
+            "cuts_mode": cuts,
             "error": str(error),
             "solution": None,
+            **construction_timings,
         }
 
 
@@ -1539,8 +1684,10 @@ def solve_gurobi_linearized(
     cardinality: bool = False,
 ) -> dict[str, Any]:
     wall_start = time.perf_counter()
+    construction_timings = empty_model_construction_timings()
+    thread_limit = gurobi_thread_limit()
     try:
-        model, x, _, thread_limit = build_gurobi_linearized_model(
+        model, x, _, thread_limit, construction_timings = build_gurobi_linearized_model(
             instance=instance,
             cuts=cuts,
             time_limit=time_limit,
@@ -1576,6 +1723,7 @@ def solve_gurobi_linearized(
             "cuts_mode": cuts,
             "error": None,
             "solution": assignment_details_from_map(instance, assignment_by_lecture),
+            **construction_timings,
         }
     except GurobiError as error:
         return {
@@ -1591,6 +1739,7 @@ def solve_gurobi_linearized(
             "cuts_mode": cuts,
             "error": str(error),
             "solution": None,
+            **construction_timings,
         }
 
 
@@ -1602,8 +1751,9 @@ def solve_gurobi_linearized_root(
     cardinality: bool = False,
 ) -> dict[str, Any]:
     wall_start = time.perf_counter()
+    construction_timings = empty_model_construction_timings()
     try:
-        model, _, _, thread_limit = build_gurobi_linearized_model(
+        model, _, _, thread_limit, construction_timings = build_gurobi_linearized_model(
             instance=instance,
             cuts=cuts,
             time_limit=time_limit,
@@ -1651,6 +1801,7 @@ def solve_gurobi_linearized_root(
             "cuts_mode": cuts,
             "error": None,
             "solution": None,
+            **construction_timings,
         }
     except GurobiError as error:
         return {
@@ -1666,6 +1817,7 @@ def solve_gurobi_linearized_root(
             "cuts_mode": cuts,
             "error": str(error),
             "solution": None,
+            **construction_timings,
         }
 
 
@@ -1677,23 +1829,35 @@ def solve_cp_sat(
     cardinality: bool = False,
 ) -> dict[str, Any]:
     wall_start = time.perf_counter()
+    construction_start = time.perf_counter()
+    construction_timings = empty_model_construction_timings()
     model = cp_model.CpModel()
     thread_limit = gurobi_thread_limit()
 
     hall_assignment: dict[int, cp_model.IntVar] = {}
+    block_start = time.perf_counter()
     for lecture in instance.lectures:
         domain = cp_model.Domain.FromValues(instance.compatibility[lecture.lecture_id])
         hall_assignment[lecture.lecture_id] = model.NewIntVarFromDomain(
             domain,
             f"a_{lecture.lecture_id}",
         )
+    construction_timings["variable_creation_wall_seconds"] = time.perf_counter() - block_start
 
-    for active_lectures in instance.active_lectures_by_slot.values():
-        if len(active_lectures) > 1:
-            model.AddAllDifferent([hall_assignment[lecture_id] for lecture_id in active_lectures])
+    block_start = time.perf_counter()
+    for _, clique_lecture_ids in build_maximal_active_cliques(instance):
+        if len(clique_lecture_ids) > 1:
+            model.AddAllDifferent([hall_assignment[lecture_id] for lecture_id in clique_lecture_ids])
+    construction_timings["overlap_constraints_wall_seconds"] = time.perf_counter() - block_start
 
     if cardinality:
+        block_start = time.perf_counter()
         cardinality_cuts = build_capacity_dominance_cuts(instance)
+        construction_timings["cardinality_cut_generation_wall_seconds"] = (
+            time.perf_counter() - block_start
+        )
+
+        block_start = time.perf_counter()
         large_halls_by_threshold = {
             cut.threshold: set(cut.large_hall_ids)
             for cut in cardinality_cuts
@@ -1727,9 +1891,16 @@ def solve_cp_sat(
                 )
                 <= cut.rhs
             )
+        construction_timings["cardinality_constraints_wall_seconds"] = (
+            time.perf_counter() - block_start
+        )
 
     objective_terms: list[Any] = []
+    block_start = time.perf_counter()
     objective_terms.extend(add_cp_same_room_constraints(model, instance, hall_assignment))
+    construction_timings["same_room_constraints_wall_seconds"] = time.perf_counter() - block_start
+
+    block_start = time.perf_counter()
     objective_terms.extend(
         add_cp_same_attendees_constraints(
             model,
@@ -1738,7 +1909,11 @@ def solve_cp_sat(
             use_strong_aggregation=(cuts == 3),
         )
     )
+    construction_timings["same_attendees_constraints_wall_seconds"] = (
+        time.perf_counter() - block_start
+    )
     z_vars: dict[tuple[int, int], cp_model.IntVar] = {}
+    block_start = time.perf_counter()
     for lecture in instance.lectures:
         compatible_penalties = instance.assignment_penalties[lecture.lecture_id]
         feasible_penalties = sorted(set(compatible_penalties.values()))
@@ -1781,14 +1956,20 @@ def solve_cp_sat(
         objective_terms.append(common_count * z_var)
 
     if cuts == 3 and z_vars:
+        cut_start = time.perf_counter()
         add_cp_extended_strong_distance_propagation(
             model=model,
             instance=instance,
             hall_assignment=hall_assignment,
             z_vars=z_vars,
         )
+        construction_timings["distance_cut_generation_wall_seconds"] = (
+            time.perf_counter() - cut_start
+        )
 
     model.Minimize(sum(objective_terms) if objective_terms else 0)
+    construction_timings["objective_construction_wall_seconds"] = time.perf_counter() - block_start
+    construction_timings["model_construction_wall_seconds"] = time.perf_counter() - construction_start
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = time_limit
@@ -1824,6 +2005,7 @@ def solve_cp_sat(
         "cuts_mode": cuts,
         "error": None,
         "solution": assignment_details_from_map(instance, assignment_by_lecture),
+        **construction_timings,
     }
 
 
@@ -1858,6 +2040,7 @@ def preprocessing_infeasible_results(selected_model: str | None, reason: str) ->
             "cuts_mode": None,
             "error": reason,
             "solution": None,
+            **empty_model_construction_timings(),
         }
         for solver_family, formulation in model_specs
     ]
@@ -2030,6 +2213,32 @@ def build_summary_rows(
                 "best_global_lower_bound": best_global_lower_bound,
                 "wall_clock_seconds": result["wall_clock_seconds"],
                 "solver_runtime_seconds": result["solver_runtime_seconds"],
+                "model_construction_wall_seconds": result.get("model_construction_wall_seconds", 0.0),
+                "variable_creation_wall_seconds": result.get("variable_creation_wall_seconds", 0.0),
+                "assignment_constraints_wall_seconds": result.get(
+                    "assignment_constraints_wall_seconds", 0.0
+                ),
+                "overlap_constraints_wall_seconds": result.get(
+                    "overlap_constraints_wall_seconds", 0.0
+                ),
+                "distance_cut_generation_wall_seconds": result.get(
+                    "distance_cut_generation_wall_seconds", 0.0
+                ),
+                "cardinality_cut_generation_wall_seconds": result.get(
+                    "cardinality_cut_generation_wall_seconds", 0.0
+                ),
+                "cardinality_constraints_wall_seconds": result.get(
+                    "cardinality_constraints_wall_seconds", 0.0
+                ),
+                "same_room_constraints_wall_seconds": result.get(
+                    "same_room_constraints_wall_seconds", 0.0
+                ),
+                "same_attendees_constraints_wall_seconds": result.get(
+                    "same_attendees_constraints_wall_seconds", 0.0
+                ),
+                "objective_construction_wall_seconds": result.get(
+                    "objective_construction_wall_seconds", 0.0
+                ),
                 "mip_gap": result["mip_gap"],
                 "optimality_gap": gap,
                 "global opt gap": global_gap,
@@ -2657,6 +2866,7 @@ def main() -> None:
                 solve_gurobi_quadratic(
                     instance,
                     args.time_limit,
+                    cuts=args.cuts,
                     verbose=not args.quiet,
                     cardinality=args.cardinality,
                 ),
@@ -2680,6 +2890,7 @@ def main() -> None:
                 solve_gurobi_quadratic(
                     instance,
                     args.time_limit,
+                    cuts=args.cuts,
                     verbose=not args.quiet,
                     cardinality=args.cardinality,
                 ),

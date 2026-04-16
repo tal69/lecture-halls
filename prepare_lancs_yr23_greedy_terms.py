@@ -96,7 +96,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Merge SameClass components in lancs-yr23.xml, validate the zero-penalty timetable, "
-            "and greedily repair student registrations for the first substantial week of each term."
+            "and greedily repair student registrations for the peak-load week of each term."
         )
     )
     parser.add_argument(
@@ -116,12 +116,6 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.5,
         help="Minimum block peak, as a fraction of the global peak, to qualify as a main teaching term.",
-    )
-    parser.add_argument(
-        "--substantial-week-ratio",
-        type=float,
-        default=0.5,
-        help="Within a term block, choose the first week whose activity reaches this fraction of the block peak.",
     )
     return parser.parse_args()
 
@@ -345,7 +339,6 @@ def identify_term_weeks(
     weekly_room_activity: list[int],
     *,
     term_peak_ratio: float,
-    substantial_week_ratio: float,
 ) -> list[TermWeek]:
     if not weekly_room_activity:
         raise ValueError("No weekly activity found.")
@@ -373,11 +366,9 @@ def identify_term_weeks(
     term_weeks: list[TermWeek] = []
     for term_index, (block_start, block_end, block_counts) in enumerate(main_blocks, start=1):
         block_peak = max(block_counts)
-        threshold = substantial_week_ratio * block_peak
-        selected_week_index = next(
-            block_start + offset
-            for offset, count in enumerate(block_counts)
-            if count >= threshold
+        selected_week_index = max(
+            range(block_start, block_end + 1),
+            key=lambda week_index: (weekly_room_activity[week_index], -week_index),
         )
         term_weeks.append(
             TermWeek(
@@ -871,7 +862,6 @@ def load_lancs_yr23_term_instances(
     short_break_slots: int | None = None,
     capacity_fix: bool = True,
     term_peak_ratio: float = 0.5,
-    substantial_week_ratio: float = 0.5,
 ) -> list[Instance]:
     instance_path = resolve_lancs_instance_path(instance)
     root = parse_xml(instance_path)
@@ -893,7 +883,6 @@ def load_lancs_yr23_term_instances(
     term_weeks = identify_term_weeks(
         active_room_components_by_week(components, nr_weeks),
         term_peak_ratio=term_peak_ratio,
-        substantial_week_ratio=substantial_week_ratio,
     )
     if len(term_weeks) != 2:
         raise ValueError(f"Expected to identify two main teaching terms, found {len(term_weeks)}.")
@@ -1002,7 +991,7 @@ def load_lancs_yr23_term_instances(
                     fixed_input_time_penalty_allocation="merged_zero_penalty_weekly_schedule",
                     raw_slot_minutes=raw_slot_minutes,
                     selected_week_index=term_week.selected_week_index,
-                    week_selection_mode=f"lancs_term{term_week.term_index}_auto_first_substantial",
+                    week_selection_mode=f"lancs_term{term_week.term_index}_auto_peak_room_activity",
                     successor_max_gap_slots=selected_short_break_slots,
                     successor_max_gap_minutes=selected_short_break_slots * raw_slot_minutes,
                     successor_gap_inference_mode=successor_gap_inference_mode,
@@ -1048,7 +1037,6 @@ def main() -> None:
     term_weeks = identify_term_weeks(
         weekly_room_activity,
         term_peak_ratio=args.term_peak_ratio,
-        substantial_week_ratio=args.substantial_week_ratio,
     )
     if len(term_weeks) != 2:
         raise ValueError(f"Expected to identify two main teaching terms, found {len(term_weeks)}.")

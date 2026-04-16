@@ -250,7 +250,7 @@ def build_distribution_pair_constraints(
     )
 
 
-def infer_first_substantial_week(
+def infer_peak_loaded_week(
     solution_root: ET.Element,
     class_catalog: dict[str, dict[str, object]],
     nr_weeks: int,
@@ -272,11 +272,9 @@ def infer_first_substantial_week(
     if peak_active_count <= 0:
         raise ValueError("Could not find any active room-requiring classes in the ITC solution.")
 
-    threshold = 0.5 * peak_active_count
-    selected_week_index = next(
-        week_idx
-        for week_idx, active_count in enumerate(active_room_classes_by_week)
-        if active_count >= threshold
+    selected_week_index = max(
+        range(len(active_room_classes_by_week)),
+        key=lambda week_idx: (active_room_classes_by_week[week_idx], -week_idx),
     )
     return selected_week_index, active_room_classes_by_week
 
@@ -600,8 +598,8 @@ def load_itc2019_day_instances(
     halls, room_id_to_hall_id, distances = build_halls_and_distances(instance_root)
     class_catalog = build_class_catalog(instance_root, room_id_to_hall_id)
     if week_index is None:
-        selected_week_index, _ = infer_first_substantial_week(solution_root, class_catalog, nr_weeks)
-        week_selection_mode = "auto_first_substantial"
+        selected_week_index, _ = infer_peak_loaded_week(solution_root, class_catalog, nr_weeks)
+        week_selection_mode = "auto_peak_room_activity"
     else:
         if week_index < 0 or week_index >= nr_weeks:
             raise ValueError(f"week_index={week_index} is outside the instance horizon 0..{nr_weeks - 1}.")
@@ -719,7 +717,7 @@ def parse_args() -> argparse.Namespace:
         dest="week_index",
         type=int,
         default=None,
-        help="Optional 0-based week index. When omitted, the first substantial teaching week is selected.",
+        help="Optional 0-based week index. When omitted, the most loaded teaching week is selected.",
     )
     parser.add_argument("--day", dest="source_day", type=int, default=None, help="Optional 0-based day index.")
     parser.add_argument(
