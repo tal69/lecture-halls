@@ -4,8 +4,22 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
+# ---------------------------------------------------------------------------
+# Usage: ./run_full_factorial_all.sh <time_limit_seconds>
+# ---------------------------------------------------------------------------
+if [[ $# -lt 1 ]]; then
+  echo "Usage: $0 <time_limit_seconds>" >&2
+  exit 1
+fi
+
+TIME_LIMIT="$1"
+if ! [[ "$TIME_LIMIT" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Error: time_limit_seconds must be a positive integer, got '$TIME_LIMIT'." >&2
+  exit 1
+fi
+
 PYTHON_BIN="${PYTHON_BIN:-python}"
-OUTPUT_FILE="full_factorial_all.xlsx"
+OUTPUT_FILE="full_factorial_${TIME_LIMIT}s.xlsx"
 
 # Five largest ITC2019 instances that satisfy:
 # 1. non-trivial room-distance matrix
@@ -41,7 +55,7 @@ run_case() {
     "--itc-instance" "$instance"
     "--output" "$OUTPUT_FILE"
     "--compatibility-preprocess" "$preprocess_mode"
-    "--quiet"
+    "--time-limit" "$TIME_LIMIT"
   )
 
   local cut_label="default"
@@ -57,7 +71,7 @@ run_case() {
   fi
 
   echo "===================================================================="
-  echo "Instance: $instance | $cut_label | $cardinality_label | preprocess=$preprocess_mode"
+  echo "Instance: $instance | $cut_label | $cardinality_label | preprocess=$preprocess_mode | time_limit=${TIME_LIMIT}s"
   echo "===================================================================="
   "${cmd[@]}"
 }
