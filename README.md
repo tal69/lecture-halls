@@ -1,12 +1,13 @@
 # Quadratic Lecture Hall Assignment
 
-This repository contains a simulation and optimization tool for the lecture hall quadratic assignment problem. The script generates a **single-day** lecture-to-hall assignment instance and solves it with alternative exact formulations while minimizing:
+This repository contains a simulation and optimization tool for the lecture hall quadratic assignment problem. The script generates or loads a **single-day** lecture-to-hall assignment instance and solves it with alternative exact formulations while minimizing:
 - the walking burden induced by consecutive lectures that share students, and
-- a linear assignment penalty for excessive wasted space in the chosen hall.
+- a linear assignment penalty for excessive wasted space in the chosen hall (or the native room-assignment penalties when using real-world data).
 
 The current workflow includes:
-- a random single-day instance generator,
+- a random single-day synthetic instance generator,
 - a student-journey simulation that determines lecture sizes and the realized successor set \(A'\),
+- an importer for the ITC 2019 course timetabling dataset that extracts single-day problems and infers student transition graphs,
 - an optional family of capacity-dominance cardinality constraints derived from maximal overlap cliques,
 - three main solver backends:
   - GUROBI bilinear `MIPQ`,
@@ -32,9 +33,9 @@ pip install pandas openpyxl gurobipy ortools
 
 `gurobipy` requires a valid Gurobi license for the `MIPQ`, `MIP`, and `ROOT` runs.
 
-## Instance Generation
+## Synthetic Instance Generation
 
-The generator now builds a **single-day** instance because the weekly problem is separable by day.
+The synthetic generator builds a **single-day** instance because the weekly problem is separable by day.
 
 Lectures:
 - have duration `2` to `4` slots,
@@ -59,6 +60,14 @@ Students:
 Lecture sizes are not sampled directly. They are the realized attendance counts produced by the cohort-based day-schedule simulation.
 After the student-journey simulation, each lecture size is tightened toward the capacity of its hidden feasible hall so that the room-capacity constraints remain globally feasible but materially more restrictive.
 
+## ITC 2019 Real-World Instances
+
+The script now natively supports loading real-world XML instances from the International Timetabling Competition (ITC 2019).
+- **Day Extraction**: Extracts a specific day of a specific week to retain the single-day focus. It infers the first substantial teaching week automatically if not specified.
+- **Student Flow Inference**: Maps class-student records to construct consecutive pair distances based on a "short break" threshold (inferred from the student timetable or manually configured).
+- **Capacity Fix**: Automatically handles capacity adjustments when the ITC solution assigned a class to a room strictly smaller than the student count by reducing the student count strictly for those anomalies.
+- **Penalties**: Incorporates the exact room-assignment penalties provided in the original ITC 2019 XML models instead of the synthetic wasted-space penalty.
+
 ## Assignment Penalty
 
 The objective now includes a per-assignment penalty that discourages placing a lecture in a hall that is much larger than needed.
@@ -76,25 +85,34 @@ Examples for a hall of capacity `100`:
 - class size `89`: penalty `1`
 - class size `80`: penalty `100`
 
-This penalty is generated automatically for every compatible lecture-hall pair and added to the objective in all solver backends (`MIPQ`, `MIP`, and `CP`).
+For synthetic instances, this penalty is generated automatically for every compatible lecture-hall pair and added to the objective in all solver backends (`MIPQ`, `MIP`, and `CP`).
+
+For ITC 2019 instances, the model instead uses the pre-existing assignment penalties defined in the dataset for each class-room pair.
 
 Determinism note:
 - if the original greedy attribute-assignment path succeeds for a given seed, the generated instance is unchanged by the fallback patch;
 - the new CP-SAT fallback only affects seeds and parameter combinations for which the old generator would previously have failed with a runtime error.
 
-## Complexity
-
-The paper now includes an NP-hardness proof for the lecture-hall assignment problem via a reduction from the classical quadratic assignment problem. The reduction already applies to a restricted single-day case with two consecutive time blocks, identical hall capacities, and full lecture-hall compatibility.
-
 ## Usage
 
-The main entry point is:
+The main entry point is `lecture_hall_experiment.py`. It defaults to synthetic generation:
 
 ```bash
 python lecture_hall_experiment.py --num-halls 10
 ```
 
-Example with more options:
+Example using an ITC 2019 instance with preprocessing and cuts:
+
+```bash
+python lecture_hall_experiment.py \
+    --source itc2019 \
+    --itc-instance pu-proj-fal19 \
+    --compatibility-preprocess light \
+    --cuts 3 \
+    --time-limit 120
+```
+
+Example with more options for synthetic generation:
 
 ```bash
 python lecture_hall_experiment.py \
@@ -121,11 +139,18 @@ python lecture_hall_experiment.py \
 
 ## Command-Line Arguments
 
-- `--num-halls` **(required)**: number of halls.
+- `--source {synthetic,itc2019}`: Input source. Default: `synthetic`.
+- `--num-halls` **(required for synthetic)**: number of halls.
 - `--slots-per-day`: number of discrete slots in the day. Default: `12`.
 - `--seed`: one seed, a closed range such as `1-100`, or a start-step-end pattern such as `1-3-10`. Default: `0`.
-- `--density`: target lecture-slot utilization, interpreted as total lecture slots divided by total available hall-slots in the day. Default: `0.9`.
+- `--density`: target lecture-slot utilization (synthetic only), interpreted as total lecture slots divided by total available hall-slots in the day. Default: `0.9`.
   - The synthetic generator also enforces the cohort-overlap rules used to create student flows. With the current `8 x 4 = 32` subject-year cohorts, at most `64` lectures can run simultaneously, so very high densities become infeasible once `num_halls > 64`.
+- `--itc-instance`: ITC 2019 instance stem, filename, or XML path (required for ITC).
+- `--itc-solution`: Optional ITC 2019 solution XML path.
+- `--itc-week-index`: Optional 0-based week index for ITC 2019.
+- `--itc-day`: Optional 0-based source day index for ITC 2019. Loads all if omitted.
+- `--itc-short-break-slots`: Optional successor gap threshold for ITC 2019. Inferred automatically if omitted.
+- `--no-capacity-fix`: Disable the default ITC capacity fix that reduces oversized lectures to their assigned room capacity.
 - `--time-limit`: per-solver time limit in seconds. Default: `60`.
 - `--cuts {0,1,2,3}`: pair-distance cut mode.
   - `0`: base compact linking constraints only.

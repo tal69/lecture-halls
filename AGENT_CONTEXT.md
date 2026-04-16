@@ -7,12 +7,14 @@ Maintain the lecture hall quadratic assignment codebase: generate seeded single-
 ## Main files
 
 - Code: [lecture_hall_experiment.py](/Users/talraviv/Library/CloudStorage/Dropbox/research/Quadraic%20Lecture%20Hall%20Assignment/lecture_hall_experiment.py)
+- ITC Loader: [prepare_itc2019_inputs.py](/Users/talraviv/Library/CloudStorage/Dropbox/research/Quadraic%20Lecture%20Hall%20Assignment/prepare_itc2019_inputs.py)
+- Batch Script: [run_full_factorial_all.sh](/Users/talraviv/Library/CloudStorage/Dropbox/research/Quadraic%20Lecture%20Hall%20Assignment/run_full_factorial_all.sh)
 - Docs: [README.md](/Users/talraviv/Library/CloudStorage/Dropbox/research/Quadraic%20Lecture%20Hall%20Assignment/README.md)
 - Paper draft: [main.tex](/Users/talraviv/Library/CloudStorage/Dropbox/research/Quadraic%20Lecture%20Hall%20Assignment/main.tex)
 
 ## Current solver scope
 
-The script generates and solves single-day instances only (`DAYS_PER_WEEK = 1`) with:
+The script generates synthetic or loads single-day instances only (`DAYS_PER_WEEK = 1`) with:
 - `MIPQ`: Gurobi bilinear MIQP
 - `MIP`: Gurobi compact linearized MILP
 - `CP`: OR-Tools CP-SAT
@@ -33,11 +35,10 @@ The objective now has two parts:
   `common_students(l1, l2) * distance(h1, h2)`
 
 2. Assignment penalty:
-- each compatible lecture-hall pair `(l, h)` gets a linear penalty based only on wasted hall space
-- the penalty is generated from the hall capacity `u` and lecture size `s`
-- there is no penalty while `s >= ceil(0.9 * u)`
-- otherwise the penalty is
-  `max(0, ceil(0.9 * u) - s)^2`
+- For synthetic problems, each compatible lecture-hall pair `(l, h)` gets a linear penalty based on wasted hall space:
+  - no penalty while `s >= ceil(0.9 * u)`
+  - otherwise `max(0, ceil(0.9 * u) - s)^2`
+- For ITC 2019 instances, the penalty directly uses the `room-penalty` provided in the raw XML data.
 
 Implementation details:
 - constant: `FREE_WASTE_RATIO = 0.10`
@@ -97,6 +98,12 @@ This penalty is now implemented in:
 - solution reconstruction and JSON reporting
 - instance JSON export
 
+### 3. ITC 2019 Integration
+- Added `prepare_itc2019_inputs.py` to extract single-day instances from ITC 2019 dataset
+- `lecture_hall_experiment.py` handles diverse assignment penalties (`quadratic_wasted_space` or `itc2019_room_penalty`)
+- Factored out logic to `lecture_hall_instance_builder.py` alongside updated data models.
+- Provided `run_full_factorial_all.sh` for batch testing real-world instances.
+
 ## Verification completed in this session
 
 - `python -m py_compile lecture_hall_experiment.py` passed
@@ -108,6 +115,7 @@ This penalty is now implemented in:
 
 ## Git guidance
 
+Background sync scripts (`auto_sync.sh` and `stop_sync.sh`) may be present. Do not delete them.
 There may be unrelated paper edits in:
 - `main.tex`
 - `main.pdf`
