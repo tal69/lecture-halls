@@ -16,6 +16,7 @@ from lecture_hall_models import Hall, Instance, Lecture
 from prepare_itc2019_inputs import (
     apply_capacity_fix,
     build_common_students,
+    build_distribution_pair_constraints,
     build_halls_and_distances,
     infer_short_break_slots,
 )
@@ -816,7 +817,13 @@ def build_term_daily_records(
 
 def build_day_lectures_from_merged_records(
     day_records: list[dict[str, object]],
-) -> tuple[list[Lecture], dict[int, list[int]], dict[int, dict[int, int]], dict[int, tuple[int, ...]]]:
+) -> tuple[
+    list[Lecture],
+    dict[int, list[int]],
+    dict[int, dict[int, int]],
+    dict[int, tuple[int, ...]],
+    dict[str, int],
+]:
     sorted_records = sorted(
         day_records,
         key=lambda record: (
@@ -830,6 +837,7 @@ def build_day_lectures_from_merged_records(
     compatibility: dict[int, list[int]] = {}
     assignment_penalties: dict[int, dict[int, int]] = {}
     lecture_students: dict[int, tuple[int, ...]] = {}
+    source_component_to_lecture_id: dict[str, int] = {}
     for lecture_id, record in enumerate(sorted_records):
         source_component_id = str(record["source_component_id"])
         lectures.append(
@@ -851,8 +859,9 @@ def build_day_lectures_from_merged_records(
         compatibility[lecture_id] = list(record["compatibility"])  # type: ignore[arg-type]
         assignment_penalties[lecture_id] = dict(record["assignment_penalties"])  # type: ignore[arg-type]
         lecture_students[lecture_id] = tuple(record["student_ids"])  # type: ignore[arg-type]
+        source_component_to_lecture_id[source_component_id] = lecture_id
 
-    return lectures, compatibility, assignment_penalties, lecture_students
+    return lectures, compatibility, assignment_penalties, lecture_students, source_component_to_lecture_id
 
 
 def load_lancs_yr23_term_instances(
@@ -922,7 +931,23 @@ def load_lancs_yr23_term_instances(
         for day_index, day_records in sorted(daily_records.items()):
             if not day_records:
                 continue
-            lectures, compatibility, assignment_penalties, lecture_students = build_day_lectures_from_merged_records(day_records)
+            (
+                lectures,
+                compatibility,
+                assignment_penalties,
+                lecture_students,
+                source_component_to_lecture_id,
+            ) = build_day_lectures_from_merged_records(day_records)
+            (
+                hard_same_room_pairs,
+                soft_same_room_pairs,
+                hard_same_attendees_pairs,
+                soft_same_attendees_pairs,
+            ) = build_distribution_pair_constraints(
+                root,
+                source_component_to_lecture_id,
+                source_group_map=class_to_component,
+            )
             adjusted_student_counts = None
             capacity_fix_changed_lectures = 0
             if capacity_fix:
@@ -965,6 +990,10 @@ def load_lancs_yr23_term_instances(
                     compatibility=adjusted_compatibility,
                     slots_per_day=slots_per_day,
                     days_per_week=1,
+                    hard_same_room_pairs=hard_same_room_pairs,
+                    soft_same_room_pairs=soft_same_room_pairs,
+                    hard_same_attendees_pairs=hard_same_attendees_pairs,
+                    soft_same_attendees_pairs=soft_same_attendees_pairs,
                     density_target=None,
                     assignment_penalties=adjusted_assignment_penalties,
                     assignment_penalty_type="itc2019_room_penalty",

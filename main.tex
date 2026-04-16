@@ -331,32 +331,96 @@ Second, soft penalties can be added for room-feature mismatch and wasted capacit
 \end{align}
 These additional terms are linear in the assignment variables, so they preserve the quadratic-plus-linear structure of the model. Consequently, the compact MILP reformulation is obtained simply by adding the same linear terms to \eqref{eq:milp-obj}, while keeping all linking constraints and valid inequalities unchanged. Likewise, in the CP model one may add per-lecture assignment costs indexed by the chosen hall. Thus these extensions move the model closer to practical room-allocation settings while preserving the exact-solution framework developed in this paper.
 
-In the timetabeling litrature researchers consider several other kinds of side constraints that may be relevant also for the quadratic room assignment problem and can be easily accomodate by the three models above. In particular several authors considered \emph{SameRoom} constraint that requires two classes, given at non overlapping time slots, to be assigned  exactly the same room. (e.g., ADD CITATION TO THE PAPER THAT DESCRIBES THE COMPETITION PROBLEM). This  can be formulated as a hard constraint that must be saitisfied by a feasible solution or as  a soft one, for which a violation penalty is attached. 
-Let $C_1^{hard}$ be the set of classes for which an hard SameRoom constraint is defined then the following MIP and MIPQ constraints can express it.
+The timetabling literature also considers several side constraints that may be relevant for the quadratic room-assignment problem and can be accommodated by the three models above. In particular, the ITC 2019 competition model includes a \emph{SameRoom} constraint requiring two classes, scheduled at non-overlapping times, to be assigned to the same room \citep{muller2025itc2019}. This constraint can be formulated either as a hard constraint that must be satisfied by every feasible solution or as a soft constraint with an associated violation penalty.
+Let $C_1^{hard}$ be the set of class pairs for which a hard SameRoom constraint is imposed. Then the following MIP and MIPQ constraints express it:
 \begin{equation}
 	\label{eq:hard-SameRoom} x_{l_1,h} = x_{l_2,h}     \qquad \forall (l_1,l_2) \in C_1^{hard}, h \in H(l_1) \cap H(l_2),
 \end{equation}
-and for the CP formulation it is even more stight forward
+and for the CP formulation it is even more straightforward:
 \begin{equation}
 	\label{eq:hard-SameRoom-CP} a_{l_1} = a_{l_2}     \qquad \forall (l_1,l_2) \in C_1^{hard}
 \end{equation}
 
-In all  formulations,  the compatible room sets of both rooms can be reduced to the intersection of their compauble sets, i.e.,   $H'(l_1)=H'(l_2) = H(l_1) \cap H(l_2)$.
+In the hard case, the compatible room sets of the two classes can be reduced to the intersection of their original feasible sets, that is,
+\[
+H'(l_1)=H'(l_2)=H(l_1) \cap H(l_2).
+\]
 
-Alternativly if the SameRoom is defined as a soft constraont for two clases $l_1, l_2$ and a penalty $\pi_{l_1, l_2}$ is assciated with its vilation, we define the set $C_1^{soft}$ as the set of such pairs and for one of them define a new binary decision variables $v_{l_1,l_2}$  for the math formulations. The model can now be extended to reflect this soft constraint by intrucing the following constraint 
+Alternatively, suppose that SameRoom is a soft constraint for a pair of classes $l_1,l_2$, with penalty $\pi_{l_1,l_2}$ if the two classes are assigned to different rooms. Let $C_1^{soft}$ be the set of such pairs, and for each pair introduce a binary variable $v_{l_1,l_2}$ that equals $1$ when the constraint is violated. A linear encoding for the MIP and MIPQ formulations is
 \begin{equation}
-	\label{eq:soft-SameRoom} v_{l_1, l_2} \leq   \sum_{h' \in H(l_1): h\ \neq h} x_{l_1,h'}  + \sum_{h' \in H(l_2): h\ \neq h}  x_{l_2,h'}      \qquad \forall (l_1,l_2) \in C_1^{soft}, h \in H(l_1) \cap H(l_2),
+	\label{eq:soft-SameRoom-a} v_{l_1,l_2} \ge x_{l_1,h} - x_{l_2,h} \qquad \forall (l_1,l_2) \in C_1^{soft},\ h \in H(l_1) \cap H(l_2),
 \end{equation}
-and then add the term 
-\[\sum_{(l_1,l_2) \in C_1^{soft}} \pi_{l_1,l_2} (1-v_{l_1,l_2}) \]  to the objective function, or simply substrat \[\sum_{(l_1,l_2) \in C_1^{soft}} \pi_{l_1,l_2} v_{l_1,l_2}. \]
-Implementation of the soft SameRoom constraint in the CP model is more strightforward: simply add  the term 
-\[\sum_{(l_1,l_2) \in C_1^{soft}} \pi_{l_1,l_2} (a_{l_1} \ne a_{l_2}) \] using recefication construct of CP that returns 1 for true logical constraint and 0 for false one. 
+\begin{equation}
+	\label{eq:soft-SameRoom-b} v_{l_1,l_2} \ge x_{l_2,h} - x_{l_1,h} \qquad \forall (l_1,l_2) \in C_1^{soft},\ h \in H(l_1) \cap H(l_2),
+\end{equation}
+\begin{equation}
+	\label{eq:soft-SameRoom-c} v_{l_1,l_2} \ge x_{l_1,h} \qquad \forall (l_1,l_2) \in C_1^{soft},\ h \in H(l_1)\setminus H(l_2),
+\end{equation}
+\begin{equation}
+	\label{eq:soft-SameRoom-d} v_{l_1,l_2} \ge x_{l_2,h} \qquad \forall (l_1,l_2) \in C_1^{soft},\ h \in H(l_2)\setminus H(l_1).
+\end{equation}
+The corresponding penalty term
+\[
+\sum_{(l_1,l_2) \in C_1^{soft}} \pi_{l_1,l_2} v_{l_1,l_2}
+\]
+is then added to the objective function. Implementation of the soft SameRoom constraint in the CP model is more straightforward: one may simply add the term
+\[
+\sum_{(l_1,l_2) \in C_1^{soft}} \pi_{l_1,l_2}\,[a_{l_1} \ne a_{l_2}]
+\]
+using a reification construct that evaluates to $1$ when the logical condition is true and to $0$ otherwise.
 
-An important cavity is that the SameRoom constraint in both of its hard and soft form are typically applicable for entire weekly timetable. E.g., class A given at Monday should be assigned to the same room of class B given on Wendsday. If one wish to enforece such constraint, the problem is no more decoposible to days and one should solve the entire week (and perhapse the entire term) simulataniously.
+An important caveat is that SameRoom constraints, in both their hard and soft forms, are typically defined over the full weekly timetable. For example, a class given on Monday may be required to use the same room as a related class given on Wednesday. If such cross-day constraints are enforced, the problem is no longer decomposable by day, and one must solve at least the whole week, and possibly the whole term, simultaneously.
 
-Another common timetabling side constraint in the litrature that is also applicable to our room assignment problem (altough in more restriceted sense)  is the \emph{SameAtendee} constaint. When adapted to the language of our setting, SameAtendee constraint limites the walking distance between two given classes. For example, the distance between the room to which $l_1$ is assigned and the room of $l_2$ cannot be greater then a given threshold.  The threshold represent an upper bound on the possible walkable distance given the end time of $l_1$ and the starting time of $l_2$, which are given as input in the room assignment problem.  SameAtendee constraints (both hard and soft) can be easily included in the models preseneted above.   
+Another common timetabling side constraint that is also relevant here, albeit in a more restricted sense, is \emph{SameAttendees} \citep{muller2025itc2019}. In the timetabling model, this constraint limits the travel time between two classes that may share students. In our setting, where event times are fixed in advance, it becomes a restriction on the admissible room pairs for two given classes. Let $C_2^{hard}$ be the set of class pairs with a hard SameAttendees constraint, and let
+\[
+F_{l_1,l_2} \subseteq H(l_1)\times H(l_2)
+\]
+denote the set of forbidden room pairs for a given pair $(l_1,l_2)$. If $l_1$ ends before $l_2$ starts, then $(h_1,h_2)\in F_{l_1,l_2}$ whenever
+\[
+d_{h_1,h_2} > \text{start}(l_2)-\text{end}(l_1).
+\]
+If $l_2$ ends before $l_1$ starts, then $(h_1,h_2)\in F_{l_1,l_2}$ whenever
+\[
+d_{h_2,h_1} > \text{start}(l_1)-\text{end}(l_2).
+\]
+If the two classes overlap in time, then every room pair is forbidden. The hard constraint is therefore expressed in the MIP and MIPQ models by
+\begin{equation}
+	\label{eq:hard-SameAttendees}
+	x_{l_1,h_1}+x_{l_2,h_2} \le 1 \qquad \forall (l_1,l_2)\in C_2^{hard},\ (h_1,h_2)\in F_{l_1,l_2}.
+\end{equation}
+In the CP model, one may equivalently forbid the assignments in $F_{l_1,l_2}$ directly.
 
-The hard SameRoom and SameAttendee constraints can also be included the compatability prepeocessing step described in Section \ref{subsec:Modeling-improvements}.
+Now let $C_2^{soft}$ be the set of soft SameAttendees pairs, with penalty $\rho_{l_1,l_2}$ for violating pair $(l_1,l_2)$. Introduce a binary variable $u_{l_1,l_2}$ that equals $1$ when the chosen room pair belongs to $F_{l_1,l_2}$. Then the MIP and MIPQ models can enforce
+\begin{equation}
+	\label{eq:soft-SameAttendees}
+	u_{l_1,l_2} \ge x_{l_1,h_1}+x_{l_2,h_2}-1
+	\qquad \forall (l_1,l_2)\in C_2^{soft},\ (h_1,h_2)\in F_{l_1,l_2},
+\end{equation}
+and add the penalty term
+\[
+\sum_{(l_1,l_2)\in C_2^{soft}} \rho_{l_1,l_2} u_{l_1,l_2}
+\]
+to the objective. In the CP model, the same logic can be implemented by a reified table constraint that links the chosen room pair to a binary violation indicator.
+
+The pairwise formulations above can be strengthened without introducing additional variables. Let $S \subseteq H(l_1)$ and $T \subseteq H(l_2)$ be such that
+\[
+S \times T \subseteq F_{l_1,l_2}.
+\]
+Then every assignment that places $l_1$ in a room from $S$ and $l_2$ in a room from $T$ necessarily violates SameAttendees. Hence the following aggregated inequalities are valid:
+\begin{equation}
+	\label{eq:hard-SameAttendees-biclique}
+	\sum_{h_1 \in S} x_{l_1,h_1} + \sum_{h_2 \in T} x_{l_2,h_2} \le 1
+	\qquad \forall (l_1,l_2)\in C_2^{hard},\ S\times T \subseteq F_{l_1,l_2},
+\end{equation}
+and
+\begin{equation}
+	\label{eq:soft-SameAttendees-biclique}
+	u_{l_1,l_2} \ge \sum_{h_1 \in S} x_{l_1,h_1} + \sum_{h_2 \in T} x_{l_2,h_2} - 1
+	\qquad \forall (l_1,l_2)\in C_2^{soft},\ S\times T \subseteq F_{l_1,l_2}.
+\end{equation}
+These inequalities dominate the basic pairwise constraints whenever $|S|>1$ or $|T|>1$. In the implementation, the extended cut mode constructs such sets by starting from one anchor room of $l_1$, collecting all rooms of $l_2$ that are forbidden with that anchor, and then enlarging the $l_1$-side set to every room that is incompatible with the entire resulting set on the $l_2$ side. This is directly analogous in spirit to the extended distance cuts used for the quadratic walking term.
+
+Hard SameRoom and SameAttendees constraints can also be incorporated into the compatibility preprocessing step described in Section \ref{subsec:Modeling-improvements}.
 
 
 

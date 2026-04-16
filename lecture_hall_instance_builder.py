@@ -6,7 +6,7 @@ from __future__ import annotations
 import hashlib
 import math
 
-from lecture_hall_models import Hall, Instance, Lecture
+from lecture_hall_models import Hall, Instance, Lecture, LecturePair, SoftLecturePair
 
 
 FREE_WASTE_RATIO = 0.10
@@ -70,6 +70,10 @@ def build_instance_from_components(
     compatibility: dict[int, list[int]],
     slots_per_day: int,
     days_per_week: int,
+    hard_same_room_pairs: tuple[LecturePair, ...] = (),
+    soft_same_room_pairs: tuple[SoftLecturePair, ...] = (),
+    hard_same_attendees_pairs: tuple[LecturePair, ...] = (),
+    soft_same_attendees_pairs: tuple[SoftLecturePair, ...] = (),
     density_target: float | None = None,
     assignment_penalties: dict[int, dict[int, int]] | None = None,
     assignment_penalty_type: str = "quadratic_wasted_space",
@@ -109,6 +113,10 @@ def build_instance_from_components(
         compatibility=compatibility,
         assignment_penalties=assignment_penalties,
         active_lectures_by_slot=active_lectures_by_slot,
+        hard_same_room_pairs=hard_same_room_pairs,
+        soft_same_room_pairs=soft_same_room_pairs,
+        hard_same_attendees_pairs=hard_same_attendees_pairs,
+        soft_same_attendees_pairs=soft_same_attendees_pairs,
         compatibility_preprocess_mode="none",
         compatibility_entries_before=compatibility_entries,
         compatibility_entries_after=compatibility_entries,

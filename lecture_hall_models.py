@@ -32,6 +32,19 @@ class Lecture:
 
 
 @dataclass(frozen=True)
+class LecturePair:
+    lecture_id_1: int
+    lecture_id_2: int
+
+
+@dataclass(frozen=True)
+class SoftLecturePair:
+    lecture_id_1: int
+    lecture_id_2: int
+    penalty: int
+
+
+@dataclass(frozen=True)
 class Instance:
     seed: int
     instance_name: str
@@ -48,6 +61,10 @@ class Instance:
     compatibility: dict[int, list[int]]
     assignment_penalties: dict[int, dict[int, int]]
     active_lectures_by_slot: dict[int, list[int]]
+    hard_same_room_pairs: tuple[LecturePair, ...] = ()
+    soft_same_room_pairs: tuple[SoftLecturePair, ...] = ()
+    hard_same_attendees_pairs: tuple[LecturePair, ...] = ()
+    soft_same_attendees_pairs: tuple[SoftLecturePair, ...] = ()
     compatibility_preprocess_mode: str = "none"
     compatibility_entries_before: int = 0
     compatibility_entries_after: int = 0

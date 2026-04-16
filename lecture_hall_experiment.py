@@ -136,8 +136,9 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Pair-distance cut mode: 0 = base link constraints only, "
             "1 = strong cut only, 2 = strong + symmetric strong cuts, "
-            "3 = one-sided extended strong cuts. The CP model uses mode 3 as an "
-            "additional propagation layer. Default: 1."
+            "3 = one-sided extended strong distance cuts plus aggregated SameAttendees "
+            "biclique cuts. The CP model uses mode 3 as an additional propagation layer. "
+            "Default: 1."
         ),
     )
     parser.add_argument(
@@ -709,6 +710,88 @@ def status_name_from_cp_sat(status_code: int) -> str:
     return mapping.get(status_code, f"STATUS_{status_code}")
 
 
+def same_attendees_pair_violated(
+    instance: Instance,
+    lecture_id_1: int,
+    hall_id_1: int,
+    lecture_id_2: int,
+    hall_id_2: int,
+    lecture_map: dict[int, Lecture] | None = None,
+) -> bool:
+    if lecture_map is None:
+        lecture_map = {lecture.lecture_id: lecture for lecture in instance.lectures}
+    lecture_1 = lecture_map[lecture_id_1]
+    lecture_2 = lecture_map[lecture_id_2]
+    if lecture_1.end_slot <= lecture_2.start_slot:
+        return instance.distances[hall_id_1][hall_id_2] > lecture_2.start_slot - lecture_1.end_slot
+    if lecture_2.end_slot <= lecture_1.start_slot:
+        return instance.distances[hall_id_2][hall_id_1] > lecture_1.start_slot - lecture_2.end_slot
+    return True
+
+
+def same_attendees_forbidden_hall_pairs(
+    instance: Instance,
+    lecture_id_1: int,
+    lecture_id_2: int,
+) -> list[tuple[int, int]]:
+    lecture_map = {lecture.lecture_id: lecture for lecture in instance.lectures}
+    return [
+        (hall_id_1, hall_id_2)
+        for hall_id_1 in instance.compatibility[lecture_id_1]
+        for hall_id_2 in instance.compatibility[lecture_id_2]
+        if same_attendees_pair_violated(
+            instance,
+            lecture_id_1,
+            hall_id_1,
+            lecture_id_2,
+            hall_id_2,
+            lecture_map=lecture_map,
+        )
+    ]
+
+
+def same_attendees_extended_biclique_patterns(
+    instance: Instance,
+    lecture_id_1: int,
+    lecture_id_2: int,
+) -> list[tuple[tuple[int, ...], tuple[int, ...]]]:
+    halls_1 = tuple(instance.compatibility[lecture_id_1])
+    halls_2 = tuple(instance.compatibility[lecture_id_2])
+    forbidden_pairs = set(same_attendees_forbidden_hall_pairs(instance, lecture_id_1, lecture_id_2))
+    if not forbidden_pairs:
+        return []
+
+    patterns: set[tuple[tuple[int, ...], tuple[int, ...]]] = set()
+
+    for anchor_hall_1 in halls_1:
+        hall_subset_2 = tuple(hall_id_2 for hall_id_2 in halls_2 if (anchor_hall_1, hall_id_2) in forbidden_pairs)
+        if not hall_subset_2:
+            continue
+        hall_subset_2_set = set(hall_subset_2)
+        hall_subset_1 = tuple(
+            hall_id_1
+            for hall_id_1 in halls_1
+            if all((hall_id_1, hall_id_2) in forbidden_pairs for hall_id_2 in hall_subset_2_set)
+        )
+        if hall_subset_1 and hall_subset_2 and not (len(hall_subset_1) == 1 and len(hall_subset_2) == 1):
+            patterns.add((hall_subset_1, hall_subset_2))
+
+    for anchor_hall_2 in halls_2:
+        hall_subset_1 = tuple(hall_id_1 for hall_id_1 in halls_1 if (hall_id_1, anchor_hall_2) in forbidden_pairs)
+        if not hall_subset_1:
+            continue
+        hall_subset_1_set = set(hall_subset_1)
+        hall_subset_2 = tuple(
+            hall_id_2
+            for hall_id_2 in halls_2
+            if all((hall_id_1, hall_id_2) in forbidden_pairs for hall_id_1 in hall_subset_1_set)
+        )
+        if hall_subset_1 and hall_subset_2 and not (len(hall_subset_1) == 1 and len(hall_subset_2) == 1):
+            patterns.add((hall_subset_1, hall_subset_2))
+
+    return sorted(patterns)
+
+
 def assignment_details_from_map(
     instance: Instance,
     assignment_by_lecture: dict[int, int] | None,
@@ -721,8 +804,12 @@ def assignment_details_from_map(
     assignments = []
     walking_objective_terms = []
     assignment_penalty_terms = []
+    same_room_penalty_terms = []
+    same_attendees_penalty_terms = []
     recomputed_walking_objective = 0
     recomputed_assignment_penalty = 0
+    recomputed_same_room_penalty = 0
+    recomputed_same_attendees_penalty = 0
 
     for lecture in instance.lectures:
         hall_id = assignment_by_lecture[lecture.lecture_id]
@@ -790,16 +877,325 @@ def assignment_details_from_map(
             }
         )
 
+    for soft_pair in instance.soft_same_room_pairs:
+        hall_id_1 = assignment_by_lecture[soft_pair.lecture_id_1]
+        hall_id_2 = assignment_by_lecture[soft_pair.lecture_id_2]
+        contribution = soft_pair.penalty if hall_id_1 != hall_id_2 else 0
+        recomputed_same_room_penalty += contribution
+        same_room_penalty_terms.append(
+            {
+                "term_type": "soft_same_room",
+                "lecture_id_1": soft_pair.lecture_id_1,
+                "lecture_name_1": lecture_map[soft_pair.lecture_id_1].name,
+                "lecture_id_2": soft_pair.lecture_id_2,
+                "lecture_name_2": lecture_map[soft_pair.lecture_id_2].name,
+                "hall_id_1": hall_id_1,
+                "hall_id_2": hall_id_2,
+                "penalty": soft_pair.penalty,
+                "violated": hall_id_1 != hall_id_2,
+                "contribution": contribution,
+            }
+        )
+
+    for soft_pair in instance.soft_same_attendees_pairs:
+        hall_id_1 = assignment_by_lecture[soft_pair.lecture_id_1]
+        hall_id_2 = assignment_by_lecture[soft_pair.lecture_id_2]
+        violated = same_attendees_pair_violated(
+            instance,
+            soft_pair.lecture_id_1,
+            hall_id_1,
+            soft_pair.lecture_id_2,
+            hall_id_2,
+            lecture_map=lecture_map,
+        )
+        contribution = soft_pair.penalty if violated else 0
+        recomputed_same_attendees_penalty += contribution
+        same_attendees_penalty_terms.append(
+            {
+                "term_type": "soft_same_attendees",
+                "lecture_id_1": soft_pair.lecture_id_1,
+                "lecture_name_1": lecture_map[soft_pair.lecture_id_1].name,
+                "lecture_id_2": soft_pair.lecture_id_2,
+                "lecture_name_2": lecture_map[soft_pair.lecture_id_2].name,
+                "hall_id_1": hall_id_1,
+                "hall_id_2": hall_id_2,
+                "penalty": soft_pair.penalty,
+                "violated": violated,
+                "contribution": contribution,
+            }
+        )
+
     return {
         "assignment_by_lecture": assignment_by_lecture,
         "assignments": assignments,
-        "objective_terms": walking_objective_terms + assignment_penalty_terms,
+        "objective_terms": (
+            walking_objective_terms
+            + assignment_penalty_terms
+            + same_room_penalty_terms
+            + same_attendees_penalty_terms
+        ),
         "walking_objective_terms": walking_objective_terms,
         "assignment_penalty_terms": assignment_penalty_terms,
+        "same_room_penalty_terms": same_room_penalty_terms,
+        "same_attendees_penalty_terms": same_attendees_penalty_terms,
         "recomputed_walking_objective": recomputed_walking_objective,
         "recomputed_assignment_penalty": recomputed_assignment_penalty,
-        "recomputed_objective": recomputed_walking_objective + recomputed_assignment_penalty,
+        "recomputed_same_room_penalty": recomputed_same_room_penalty,
+        "recomputed_same_attendees_penalty": recomputed_same_attendees_penalty,
+        "recomputed_objective": (
+            recomputed_walking_objective
+            + recomputed_assignment_penalty
+            + recomputed_same_room_penalty
+            + recomputed_same_attendees_penalty
+        ),
     }
+
+
+def add_gurobi_same_room_constraints(
+    model: Model,
+    instance: Instance,
+    x: dict[tuple[int, int], Any],
+) -> list[Any]:
+    soft_penalty_terms: list[Any] = []
+
+    for pair in instance.hard_same_room_pairs:
+        lecture_id_1 = pair.lecture_id_1
+        lecture_id_2 = pair.lecture_id_2
+        halls_1 = set(instance.compatibility[lecture_id_1])
+        halls_2 = set(instance.compatibility[lecture_id_2])
+        common_halls = sorted(halls_1 & halls_2)
+        for hall_id in common_halls:
+            model.addConstr(
+                x[(lecture_id_1, hall_id)] == x[(lecture_id_2, hall_id)],
+                name=f"hard_same_room_eq_{lecture_id_1}_{lecture_id_2}_{hall_id}",
+            )
+        for hall_id in sorted(halls_1 - halls_2):
+            model.addConstr(
+                x[(lecture_id_1, hall_id)] == 0,
+                name=f"hard_same_room_l1only_{lecture_id_1}_{lecture_id_2}_{hall_id}",
+            )
+        for hall_id in sorted(halls_2 - halls_1):
+            model.addConstr(
+                x[(lecture_id_2, hall_id)] == 0,
+                name=f"hard_same_room_l2only_{lecture_id_1}_{lecture_id_2}_{hall_id}",
+            )
+
+    for soft_pair in instance.soft_same_room_pairs:
+        lecture_id_1 = soft_pair.lecture_id_1
+        lecture_id_2 = soft_pair.lecture_id_2
+        violation_var = model.addVar(
+            vtype=GRB.BINARY,
+            name=f"soft_same_room_{lecture_id_1}_{lecture_id_2}",
+        )
+        halls_1 = set(instance.compatibility[lecture_id_1])
+        halls_2 = set(instance.compatibility[lecture_id_2])
+        common_halls = sorted(halls_1 & halls_2)
+        for hall_id in common_halls:
+            model.addConstr(
+                violation_var >= x[(lecture_id_1, hall_id)] - x[(lecture_id_2, hall_id)],
+                name=f"soft_same_room_pos_{lecture_id_1}_{lecture_id_2}_{hall_id}",
+            )
+            model.addConstr(
+                violation_var >= x[(lecture_id_2, hall_id)] - x[(lecture_id_1, hall_id)],
+                name=f"soft_same_room_neg_{lecture_id_1}_{lecture_id_2}_{hall_id}",
+            )
+        for hall_id in sorted(halls_1 - halls_2):
+            model.addConstr(
+                violation_var >= x[(lecture_id_1, hall_id)],
+                name=f"soft_same_room_l1only_{lecture_id_1}_{lecture_id_2}_{hall_id}",
+            )
+        for hall_id in sorted(halls_2 - halls_1):
+            model.addConstr(
+                violation_var >= x[(lecture_id_2, hall_id)],
+                name=f"soft_same_room_l2only_{lecture_id_1}_{lecture_id_2}_{hall_id}",
+            )
+        soft_penalty_terms.append(soft_pair.penalty * violation_var)
+
+    return soft_penalty_terms
+
+
+def add_gurobi_same_attendees_constraints(
+    model: Model,
+    instance: Instance,
+    x: dict[tuple[int, int], Any],
+    use_strong_aggregation: bool = False,
+) -> list[Any]:
+    soft_penalty_terms: list[Any] = []
+
+    for pair in instance.hard_same_attendees_pairs:
+        forbidden_pairs = same_attendees_forbidden_hall_pairs(
+            instance,
+            pair.lecture_id_1,
+            pair.lecture_id_2,
+        )
+        for hall_id_1, hall_id_2 in forbidden_pairs:
+            model.addConstr(
+                x[(pair.lecture_id_1, hall_id_1)] + x[(pair.lecture_id_2, hall_id_2)] <= 1,
+                name=f"hard_same_attendees_{pair.lecture_id_1}_{pair.lecture_id_2}_{hall_id_1}_{hall_id_2}",
+            )
+        if use_strong_aggregation:
+            for hall_subset_1, hall_subset_2 in same_attendees_extended_biclique_patterns(
+                instance,
+                pair.lecture_id_1,
+                pair.lecture_id_2,
+            ):
+                model.addConstr(
+                    quicksum(x[(pair.lecture_id_1, hall_id)] for hall_id in hall_subset_1)
+                    + quicksum(x[(pair.lecture_id_2, hall_id)] for hall_id in hall_subset_2)
+                    <= 1,
+                    name=(
+                        f"hard_same_attendees_biclique_{pair.lecture_id_1}_{pair.lecture_id_2}"
+                        f"_{len(hall_subset_1)}_{len(hall_subset_2)}"
+                    ),
+                )
+
+    for soft_pair in instance.soft_same_attendees_pairs:
+        forbidden_pairs = same_attendees_forbidden_hall_pairs(
+            instance,
+            soft_pair.lecture_id_1,
+            soft_pair.lecture_id_2,
+        )
+        if not forbidden_pairs:
+            continue
+        violation_var = model.addVar(
+            vtype=GRB.BINARY,
+            name=f"soft_same_attendees_{soft_pair.lecture_id_1}_{soft_pair.lecture_id_2}",
+        )
+        for hall_id_1, hall_id_2 in forbidden_pairs:
+            model.addConstr(
+                violation_var >= x[(soft_pair.lecture_id_1, hall_id_1)] + x[(soft_pair.lecture_id_2, hall_id_2)] - 1,
+                name=(
+                    f"soft_same_attendees_{soft_pair.lecture_id_1}_{soft_pair.lecture_id_2}"
+                    f"_{hall_id_1}_{hall_id_2}"
+                ),
+            )
+        if use_strong_aggregation:
+            for hall_subset_1, hall_subset_2 in same_attendees_extended_biclique_patterns(
+                instance,
+                soft_pair.lecture_id_1,
+                soft_pair.lecture_id_2,
+            ):
+                model.addConstr(
+                    violation_var
+                    >= quicksum(x[(soft_pair.lecture_id_1, hall_id)] for hall_id in hall_subset_1)
+                    + quicksum(x[(soft_pair.lecture_id_2, hall_id)] for hall_id in hall_subset_2)
+                    - 1,
+                    name=(
+                        f"soft_same_attendees_biclique_{soft_pair.lecture_id_1}_{soft_pair.lecture_id_2}"
+                        f"_{len(hall_subset_1)}_{len(hall_subset_2)}"
+                    ),
+                )
+        soft_penalty_terms.append(soft_pair.penalty * violation_var)
+
+    return soft_penalty_terms
+
+
+def add_cp_same_room_constraints(
+    model: cp_model.CpModel,
+    instance: Instance,
+    hall_assignment: dict[int, cp_model.IntVar],
+) -> list[Any]:
+    penalty_terms: list[Any] = []
+
+    for pair in instance.hard_same_room_pairs:
+        model.Add(hall_assignment[pair.lecture_id_1] == hall_assignment[pair.lecture_id_2])
+
+    for soft_pair in instance.soft_same_room_pairs:
+        violation_var = model.NewBoolVar(
+            f"soft_same_room_{soft_pair.lecture_id_1}_{soft_pair.lecture_id_2}"
+        )
+        model.AddAllowedAssignments(
+            [hall_assignment[soft_pair.lecture_id_1], hall_assignment[soft_pair.lecture_id_2], violation_var],
+            [
+                (hall_id_1, hall_id_2, 0 if hall_id_1 == hall_id_2 else 1)
+                for hall_id_1 in instance.compatibility[soft_pair.lecture_id_1]
+                for hall_id_2 in instance.compatibility[soft_pair.lecture_id_2]
+            ],
+        )
+        penalty_terms.append(soft_pair.penalty * violation_var)
+
+    return penalty_terms
+
+
+def add_cp_same_attendees_constraints(
+    model: cp_model.CpModel,
+    instance: Instance,
+    hall_assignment: dict[int, cp_model.IntVar],
+    use_strong_aggregation: bool = False,
+) -> list[Any]:
+    penalty_terms: list[Any] = []
+    lecture_map = {lecture.lecture_id: lecture for lecture in instance.lectures}
+    subset_indicator_cache: dict[tuple[int, tuple[int, ...]], cp_model.IntVar] = {}
+
+    def subset_indicator(lecture_id: int, hall_subset: tuple[int, ...]) -> cp_model.IntVar:
+        key = (lecture_id, hall_subset)
+        if key in subset_indicator_cache:
+            return subset_indicator_cache[key]
+        indicator = model.NewBoolVar(f"sameatt_subset_{lecture_id}_{len(subset_indicator_cache)}")
+        hall_subset_set = set(hall_subset)
+        model.AddAllowedAssignments(
+            [hall_assignment[lecture_id], indicator],
+            [
+                (hall_id, 1 if hall_id in hall_subset_set else 0)
+                for hall_id in instance.compatibility[lecture_id]
+            ],
+        )
+        subset_indicator_cache[key] = indicator
+        return indicator
+
+    for pair in instance.hard_same_attendees_pairs:
+        forbidden_pairs = same_attendees_forbidden_hall_pairs(instance, pair.lecture_id_1, pair.lecture_id_2)
+        if not forbidden_pairs:
+            continue
+        model.AddForbiddenAssignments(
+            [hall_assignment[pair.lecture_id_1], hall_assignment[pair.lecture_id_2]],
+            forbidden_pairs,
+        )
+        if use_strong_aggregation:
+            for hall_subset_1, hall_subset_2 in same_attendees_extended_biclique_patterns(
+                instance,
+                pair.lecture_id_1,
+                pair.lecture_id_2,
+            ):
+                left_indicator = subset_indicator(pair.lecture_id_1, hall_subset_1)
+                right_indicator = subset_indicator(pair.lecture_id_2, hall_subset_2)
+                model.AddBoolOr([left_indicator.Not(), right_indicator.Not()])
+
+    for soft_pair in instance.soft_same_attendees_pairs:
+        violation_var = model.NewBoolVar(
+            f"soft_same_attendees_{soft_pair.lecture_id_1}_{soft_pair.lecture_id_2}"
+        )
+        model.AddAllowedAssignments(
+            [hall_assignment[soft_pair.lecture_id_1], hall_assignment[soft_pair.lecture_id_2], violation_var],
+            [
+                (
+                    hall_id_1,
+                    hall_id_2,
+                    1 if same_attendees_pair_violated(
+                        instance,
+                        soft_pair.lecture_id_1,
+                        hall_id_1,
+                        soft_pair.lecture_id_2,
+                        hall_id_2,
+                        lecture_map=lecture_map,
+                    ) else 0,
+                )
+                for hall_id_1 in instance.compatibility[soft_pair.lecture_id_1]
+                for hall_id_2 in instance.compatibility[soft_pair.lecture_id_2]
+            ],
+        )
+        if use_strong_aggregation:
+            for hall_subset_1, hall_subset_2 in same_attendees_extended_biclique_patterns(
+                instance,
+                soft_pair.lecture_id_1,
+                soft_pair.lecture_id_2,
+            ):
+                left_indicator = subset_indicator(soft_pair.lecture_id_1, hall_subset_1)
+                right_indicator = subset_indicator(soft_pair.lecture_id_2, hall_subset_2)
+                model.AddBoolOr([left_indicator.Not(), right_indicator.Not(), violation_var])
+        penalty_terms.append(soft_pair.penalty * violation_var)
+
+    return penalty_terms
 
 
 def build_gurobi_linearized_model(
@@ -880,6 +1276,14 @@ def build_gurobi_linearized_model(
                 expr <= cut.rhs,
                 name=f"card_d{cut.day}_c{cut.clique_index}_k{cut.threshold}",
             )
+
+    same_room_penalty_terms = add_gurobi_same_room_constraints(model, instance, x)
+    same_attendees_penalty_terms = add_gurobi_same_attendees_constraints(
+        model,
+        instance,
+        x,
+        use_strong_aggregation=(cuts == 3),
+    )
 
     if cuts == 0:
         for lecture_id_1, lecture_id_2 in instance.common_students:
@@ -991,6 +1395,8 @@ def build_gurobi_linearized_model(
         for lecture in instance.lectures
         for hall_id in instance.compatibility[lecture.lecture_id]
     )
+    objective_terms.extend(same_room_penalty_terms)
+    objective_terms.extend(same_attendees_penalty_terms)
     model.setObjective(quicksum(objective_terms), GRB.MINIMIZE)
     return model, x, z_vars, thread_limit
 
@@ -1058,6 +1464,9 @@ def solve_gurobi_quadratic(
                     name=f"card_d{cut.day}_c{cut.clique_index}_k{cut.threshold}",
                 )
 
+        same_room_penalty_terms = add_gurobi_same_room_constraints(model, instance, x)
+        same_attendees_penalty_terms = add_gurobi_same_attendees_constraints(model, instance, x)
+
         objective_terms = []
         for (lecture_id_1, lecture_id_2), common_count in instance.common_students.items():
             for hall_id_1 in instance.compatibility[lecture_id_1]:
@@ -1074,6 +1483,8 @@ def solve_gurobi_quadratic(
             for lecture in instance.lectures
             for hall_id in instance.compatibility[lecture.lecture_id]
         )
+        objective_terms.extend(same_room_penalty_terms)
+        objective_terms.extend(same_attendees_penalty_terms)
         model.setObjective(quicksum(objective_terms), GRB.MINIMIZE)
         model.optimize()
 
@@ -1318,6 +1729,15 @@ def solve_cp_sat(
             )
 
     objective_terms: list[Any] = []
+    objective_terms.extend(add_cp_same_room_constraints(model, instance, hall_assignment))
+    objective_terms.extend(
+        add_cp_same_attendees_constraints(
+            model,
+            instance,
+            hall_assignment,
+            use_strong_aggregation=(cuts == 3),
+        )
+    )
     z_vars: dict[tuple[int, int], cp_model.IntVar] = {}
     for lecture in instance.lectures:
         compatible_penalties = instance.assignment_penalties[lecture.lecture_id]
@@ -1505,6 +1925,12 @@ def build_summary_rows(
         matching_penalty_value = (
             solution["recomputed_assignment_penalty"] if solution is not None else None
         )
+        same_room_penalty_value = (
+            solution["recomputed_same_room_penalty"] if solution is not None else None
+        )
+        same_attendees_penalty_value = (
+            solution["recomputed_same_attendees_penalty"] if solution is not None else None
+        )
         if gap is None and obj is not None and lb is not None:
             if obj != 0:
                 gap = max(0.0, float(obj - lb) / abs(float(obj)))
@@ -1558,6 +1984,10 @@ def build_summary_rows(
                 "max_hall_capacity": max(capacities),
                 "candidate_successor_pairs": candidate_successors,
                 "successor_pairs_with_common_students": len(instance.common_students),
+                "hard_same_room_pairs": len(instance.hard_same_room_pairs),
+                "soft_same_room_pairs": len(instance.soft_same_room_pairs),
+                "hard_same_attendees_pairs": len(instance.hard_same_attendees_pairs),
+                "soft_same_attendees_pairs": len(instance.soft_same_attendees_pairs),
                 "decomposition_connected_components": decomposition_connected_components,
                 "compatibility_preprocess_mode": instance.compatibility_preprocess_mode,
                 "compatibility_entries_before": instance.compatibility_entries_before,
@@ -1594,6 +2024,8 @@ def build_summary_rows(
                 "objective_value": result["objective_value"],
                 "total_student_walking_distance": walking_objective_value,
                 "matching_penalty": matching_penalty_value,
+                "soft_same_room_penalty": same_room_penalty_value,
+                "soft_same_attendees_penalty": same_attendees_penalty_value,
                 "lower_bound": result["lower_bound"],
                 "best_global_lower_bound": best_global_lower_bound,
                 "wall_clock_seconds": result["wall_clock_seconds"],
@@ -1794,6 +2226,34 @@ def instance_to_json_dict(instance: Instance) -> dict[str, Any]:
             }
             for (lecture_id_1, lecture_id_2), common_count in sorted(instance.common_students.items())
         ],
+        "same_room_constraints": {
+            "hard_pairs": [
+                {"lecture_id_1": pair.lecture_id_1, "lecture_id_2": pair.lecture_id_2}
+                for pair in instance.hard_same_room_pairs
+            ],
+            "soft_pairs": [
+                {
+                    "lecture_id_1": pair.lecture_id_1,
+                    "lecture_id_2": pair.lecture_id_2,
+                    "penalty": pair.penalty,
+                }
+                for pair in instance.soft_same_room_pairs
+            ],
+        },
+        "same_attendees_constraints": {
+            "hard_pairs": [
+                {"lecture_id_1": pair.lecture_id_1, "lecture_id_2": pair.lecture_id_2}
+                for pair in instance.hard_same_attendees_pairs
+            ],
+            "soft_pairs": [
+                {
+                    "lecture_id_1": pair.lecture_id_1,
+                    "lecture_id_2": pair.lecture_id_2,
+                    "penalty": pair.penalty,
+                }
+                for pair in instance.soft_same_attendees_pairs
+            ],
+        },
         "distances": instance.distances,
         "active_lectures_by_slot": [
             {"slot": slot, "lecture_ids": lecture_ids}
@@ -1954,6 +2414,19 @@ def print_instance_console_view(instance: Instance, json_path: Path) -> None:
         f"min compatible halls per lecture={min_compatibility}, max distance={max_distance}, "
         f"max assignment penalty={max_assignment_penalty}, peak active lectures={peak_active_lectures}"
     )
+    if (
+        instance.hard_same_room_pairs
+        or instance.soft_same_room_pairs
+        or instance.hard_same_attendees_pairs
+        or instance.soft_same_attendees_pairs
+    ):
+        print(
+            "Side constraints: "
+            f"hard SameRoom={len(instance.hard_same_room_pairs)}, "
+            f"soft SameRoom={len(instance.soft_same_room_pairs)}, "
+            f"hard SameAttendees={len(instance.hard_same_attendees_pairs)}, "
+            f"soft SameAttendees={len(instance.soft_same_attendees_pairs)}"
+        )
     if instance.assignment_penalty_type == "itc2019_room_penalty":
         print("Penalty: assignment penalties are the ITC 2019 class-room penalties from the instance XML.")
     else:

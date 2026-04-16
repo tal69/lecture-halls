@@ -10,7 +10,7 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 
 from lecture_hall_instance_builder import build_instance_from_components, stable_seed_from_text
-from lecture_hall_models import Hall, Instance, Lecture
+from lecture_hall_models import Hall, Instance, Lecture, LecturePair, SoftLecturePair
 
 
 DEFAULT_INSTANCE_DIR = Path("ITC2019")
@@ -160,6 +160,94 @@ def build_class_catalog(instance_root: ET.Element, room_id_to_hall_id: dict[str,
                         },
                     }
     return class_catalog
+
+
+def dedupe_preserve_order(values: list[str]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return tuple(result)
+
+
+def canonical_lecture_pair(lecture_id_1: int, lecture_id_2: int) -> tuple[int, int]:
+    if lecture_id_1 <= lecture_id_2:
+        return lecture_id_1, lecture_id_2
+    return lecture_id_2, lecture_id_1
+
+
+def build_distribution_pair_constraints(
+    root: ET.Element,
+    source_id_to_lecture_id: dict[str, int],
+    *,
+    source_group_map: dict[str, str] | None = None,
+) -> tuple[
+    tuple[LecturePair, ...],
+    tuple[SoftLecturePair, ...],
+    tuple[LecturePair, ...],
+    tuple[SoftLecturePair, ...],
+]:
+    hard_same_room_pairs: set[tuple[int, int]] = set()
+    hard_same_attendees_pairs: set[tuple[int, int]] = set()
+    soft_same_room_penalty_by_pair: dict[tuple[int, int], int] = defaultdict(int)
+    soft_same_attendees_penalty_by_pair: dict[tuple[int, int], int] = defaultdict(int)
+
+    distributions_element = root.find("distributions")
+    if distributions_element is None:
+        return (), (), (), ()
+
+    for distribution in distributions_element.findall("distribution"):
+        distribution_type = distribution.get("type")
+        if distribution_type not in {"SameRoom", "SameAttendees"}:
+            continue
+        member_source_ids = []
+        for class_element in distribution.findall("class"):
+            class_id = class_element.get("id")
+            if class_id is None:
+                continue
+            member_source_ids.append(source_group_map.get(class_id, class_id) if source_group_map is not None else class_id)
+        member_source_ids = list(dedupe_preserve_order(member_source_ids))
+        member_lecture_ids = [
+            source_id_to_lecture_id[source_id]
+            for source_id in member_source_ids
+            if source_id in source_id_to_lecture_id
+        ]
+        if len(member_lecture_ids) < 2:
+            continue
+
+        required_attr = distribution.get("required")
+        penalty_attr = distribution.get("penalty")
+        required = required_attr == "true" if required_attr is not None else penalty_attr is None
+        penalty = int(penalty_attr) if penalty_attr is not None else 0
+        for left_index, lecture_id_1 in enumerate(member_lecture_ids):
+            for lecture_id_2 in member_lecture_ids[left_index + 1:]:
+                pair = canonical_lecture_pair(lecture_id_1, lecture_id_2)
+                if distribution_type == "SameRoom":
+                    if required:
+                        hard_same_room_pairs.add(pair)
+                    elif penalty > 0:
+                        soft_same_room_penalty_by_pair[pair] += penalty
+                else:
+                    if required:
+                        hard_same_attendees_pairs.add(pair)
+                    elif penalty > 0:
+                        soft_same_attendees_penalty_by_pair[pair] += penalty
+
+    return (
+        tuple(LecturePair(left, right) for left, right in sorted(hard_same_room_pairs)),
+        tuple(
+            SoftLecturePair(left, right, penalty)
+            for (left, right), penalty in sorted(soft_same_room_penalty_by_pair.items())
+        ),
+        tuple(LecturePair(left, right) for left, right in sorted(hard_same_attendees_pairs)),
+        tuple(
+            SoftLecturePair(left, right, penalty)
+            for (left, right), penalty in sorted(soft_same_attendees_penalty_by_pair.items())
+        ),
+    )
 
 
 def infer_first_substantial_week(
@@ -346,7 +434,13 @@ def build_daily_lecture_records(
 
 def build_day_lectures(
     day_records: list[dict[str, object]],
-) -> tuple[list[Lecture], dict[int, list[int]], dict[int, dict[int, int]], dict[int, tuple[int, ...]]]:
+) -> tuple[
+    list[Lecture],
+    dict[int, list[int]],
+    dict[int, dict[int, int]],
+    dict[int, tuple[int, ...]],
+    dict[str, int],
+]:
     sorted_records = sorted(
         day_records,
         key=lambda record: (
@@ -360,13 +454,15 @@ def build_day_lectures(
     compatibility: dict[int, list[int]] = {}
     assignment_penalties: dict[int, dict[int, int]] = {}
     lecture_students: dict[int, tuple[int, ...]] = {}
+    source_id_to_lecture_id: dict[str, int] = {}
     for lecture_id, record in enumerate(sorted_records):
+        source_class_id = str(record["source_class_id"])
         lectures.append(
             Lecture(
                 lecture_id=lecture_id,
                 name=(
                     f"course_{record['course_id']}_config_{record['config_id']}"
-                    f"_subpart_{record['subpart_id']}_class_{record['source_class_id']}"
+                    f"_subpart_{record['subpart_id']}_class_{source_class_id}"
                 ),
                 subject=f"ITC_C{record['course_id']}",
                 study_year=1,
@@ -383,8 +479,9 @@ def build_day_lectures(
         compatibility[lecture_id] = list(record["compatibility"])  # type: ignore[arg-type]
         assignment_penalties[lecture_id] = dict(record["assignment_penalties"])  # type: ignore[arg-type]
         lecture_students[lecture_id] = record["student_ids"]  # type: ignore[assignment]
+        source_id_to_lecture_id[source_class_id] = lecture_id
 
-    return lectures, compatibility, assignment_penalties, lecture_students
+    return lectures, compatibility, assignment_penalties, lecture_students, source_id_to_lecture_id
 
 
 def apply_capacity_fix(
@@ -536,7 +633,16 @@ def load_itc2019_day_instances(
     for day_index, day_records in selected_items:
         if not day_records:
             continue
-        lectures, compatibility, assignment_penalties, lecture_students = build_day_lectures(day_records)
+        lectures, compatibility, assignment_penalties, lecture_students, source_id_to_lecture_id = build_day_lectures(day_records)
+        (
+            hard_same_room_pairs,
+            soft_same_room_pairs,
+            hard_same_attendees_pairs,
+            soft_same_attendees_pairs,
+        ) = build_distribution_pair_constraints(
+            instance_root,
+            source_id_to_lecture_id,
+        )
         adjusted_student_counts = None
         capacity_fix_changed_lectures = 0
         if capacity_fix:
@@ -577,6 +683,10 @@ def load_itc2019_day_instances(
                 compatibility=adjusted_compatibility,
                 slots_per_day=slots_per_day,
                 days_per_week=1,
+                hard_same_room_pairs=hard_same_room_pairs,
+                soft_same_room_pairs=soft_same_room_pairs,
+                hard_same_attendees_pairs=hard_same_attendees_pairs,
+                soft_same_attendees_pairs=soft_same_attendees_pairs,
                 density_target=None,
                 assignment_penalties=adjusted_assignment_penalties,
                 assignment_penalty_type="itc2019_room_penalty",
