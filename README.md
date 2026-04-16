@@ -68,6 +68,12 @@ The script now natively supports loading real-world XML instances from the Inter
 - **Capacity Fix**: Automatically handles capacity adjustments when the ITC solution assigned a class to a room strictly smaller than the student count by reducing the student count strictly for those anomalies.
 - **Penalties**: Incorporates the exact room-assignment penalties provided in the original ITC 2019 XML models instead of the synthetic wasted-space penalty.
 
+The repository also supports a Lancaster-specific bridge for `lancs-yr23.xml`.
+- It merges `SameClass` components into representative activities.
+- It selects the first substantial week of each of the two main teaching terms.
+- It greedily repairs student registrations subject to merged weekly timetable feasibility and hidden-room capacities.
+- It then exposes the resulting single-day room-assignment instances directly to `lecture_hall_experiment.py`.
+
 ## Assignment Penalty
 
 The objective now includes a per-assignment penalty that discourages placing a lecture in a hall that is much larger than needed.
@@ -112,6 +118,15 @@ python lecture_hall_experiment.py \
     --time-limit 120
 ```
 
+Example using the Lancaster bridge:
+
+```bash
+python lecture_hall_experiment.py \
+    --source lancs_yr23 \
+    --itc-day 1 \
+    --instance-only
+```
+
 Example with more options for synthetic generation:
 
 ```bash
@@ -139,15 +154,17 @@ python lecture_hall_experiment.py \
 
 ## Command-Line Arguments
 
-- `--source {synthetic,itc2019}`: Input source. Default: `synthetic`.
+- `--source {synthetic,itc2019,lancs_yr23}`: Input source. Default: `synthetic`.
 - `--num-halls` **(required for synthetic)**: number of halls.
 - `--slots-per-day`: number of discrete slots in the day. Default: `12`.
 - `--seed`: one seed, a closed range such as `1-100`, or a start-step-end pattern such as `1-3-10`. Default: `0`.
 - `--density`: target lecture-slot utilization (synthetic only), interpreted as total lecture slots divided by total available hall-slots in the day. Default: `0.9`.
   - The synthetic generator also enforces the cohort-overlap rules used to create student flows. With the current `8 x 4 = 32` subject-year cohorts, at most `64` lectures can run simultaneously, so very high densities become infeasible once `num_halls > 64`.
 - `--itc-instance`: ITC 2019 instance stem, filename, or XML path (required for ITC).
+  - Optional for `lancs_yr23`; when omitted it defaults to `ITC2019/lancs-yr23.xml`.
 - `--itc-solution`: Optional ITC 2019 solution XML path.
 - `--itc-week-index`: Optional 0-based week index for ITC 2019.
+  - Not used by `lancs_yr23` because that bridge auto-selects one substantial week per term.
 - `--itc-day`: Optional 0-based source day index for ITC 2019. Loads all if omitted.
 - `--itc-short-break-slots`: Optional successor gap threshold for ITC 2019. Inferred automatically if omitted.
 - `--no-capacity-fix`: Disable the default ITC capacity fix that reduces oversized lectures to their assigned room capacity.

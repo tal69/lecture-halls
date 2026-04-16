@@ -1,4 +1,4 @@
-So# AGENT_CONTEXT
+# AGENT_CONTEXT
 
 ## Project goal
 

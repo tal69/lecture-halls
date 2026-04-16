@@ -11,6 +11,15 @@ import xml.etree.ElementTree as ET
 
 import pandas as pd
 
+from lecture_hall_instance_builder import build_instance_from_components, stable_seed_from_text
+from lecture_hall_models import Hall, Instance, Lecture
+from prepare_itc2019_inputs import (
+    apply_capacity_fix,
+    build_common_students,
+    build_halls_and_distances,
+    infer_short_break_slots,
+)
+
 
 DEFAULT_INSTANCE_PATH = Path("ITC2019/lancs-yr23.xml")
 DEFAULT_OUTPUT_PATH = Path("Numerical experiment results/lancs_yr23_greedy_terms.xlsx")
@@ -28,6 +37,7 @@ class MergedComponent:
     length: int
     end: int
     room_id: str | None
+    room_penalties_by_room_id: dict[str, int]
 
 
 @dataclass(frozen=True)
@@ -174,6 +184,7 @@ def build_sameclass_components(
         ordered_member_ids = tuple(sorted(member_ids, key=int))
         zero_times = []
         zero_rooms = []
+        room_penalty_maps: list[dict[str, int]] = []
         for member_id in ordered_member_ids:
             class_element = class_elements[member_id]
             zero_time_candidates = [time for time in class_element.findall("time") if int(time.get("penalty", "0")) == 0]
@@ -184,6 +195,13 @@ def build_sameclass_components(
             zero_times.append(zero_time_candidates[0])
             zero_room_candidates = [room for room in class_element.findall("room") if int(room.get("penalty", "0")) == 0]
             zero_rooms.append(zero_room_candidates[0].get("id") if zero_room_candidates else None)
+            room_penalty_maps.append(
+                {
+                    room.get("id"): int(room.get("penalty", "0"))
+                    for room in class_element.findall("room")
+                    if room.get("id") is not None
+                }
+            )
 
         first_time = zero_times[0]
         first_time_key = (
@@ -211,6 +229,24 @@ def build_sameclass_components(
                 f"SameClass component rooted at {root_id} has inconsistent zero-penalty rooms: {sorted(nonnull_rooms)}."
             )
 
+        common_room_ids = set(room_penalty_maps[0]) if room_penalty_maps else set()
+        for room_penalty_map in room_penalty_maps[1:]:
+            common_room_ids &= set(room_penalty_map)
+        common_room_penalties: dict[str, int] = {}
+        for room_id in sorted(common_room_ids, key=int):
+            penalties = {room_penalty_map[room_id] for room_penalty_map in room_penalty_maps}
+            if len(penalties) != 1:
+                raise ValueError(
+                    f"SameClass component rooted at {root_id} has inconsistent penalties for room {room_id}: "
+                    f"{sorted(penalties)}."
+                )
+            common_room_penalties[room_id] = penalties.pop()
+        if nonnull_rooms and next(iter(nonnull_rooms)) not in common_room_penalties:
+            raise ValueError(
+                f"SameClass component rooted at {root_id} has zero-penalty room {next(iter(nonnull_rooms))} "
+                "outside the common room-option intersection."
+            )
+
         days, weeks, start, length = first_time_key
         component = MergedComponent(
             component_id=root_id,
@@ -223,6 +259,7 @@ def build_sameclass_components(
             length=length,
             end=start + length,
             room_id=next(iter(nonnull_rooms)) if nonnull_rooms else None,
+            room_penalties_by_room_id=common_room_penalties,
         )
         components[root_id] = component
         for member_id in ordered_member_ids:
@@ -450,6 +487,24 @@ def option_fits_schedule(
     return True
 
 
+def option_fits_capacity(
+    option: WeeklyCourseOption,
+    *,
+    scheduled_component_ids: set[str],
+    used_capacity_by_component: Counter[str],
+    capacity_by_component: dict[str, int | None],
+) -> bool:
+    for component_id in option.active_component_ids:
+        if component_id in scheduled_component_ids:
+            continue
+        component_capacity = capacity_by_component.get(component_id)
+        if component_capacity is None:
+            continue
+        if used_capacity_by_component[component_id] >= component_capacity:
+            return False
+    return True
+
+
 def option_is_self_consistent(option: WeeklyCourseOption, components: dict[str, MergedComponent]) -> bool:
     component_ids = option.active_component_ids
     for left_index, left_component_id in enumerate(component_ids):
@@ -465,6 +520,7 @@ def greedy_assign_term_week(
     student_requests: list[tuple[str, tuple[str, ...]]],
     course_configs: dict[str, list[CourseConfig]],
     components: dict[str, MergedComponent],
+    capacity_by_component: dict[str, int | None],
 ) -> tuple[dict[str, dict[str, WeeklyCourseOption]], list[dict[str, object]], list[dict[str, object]], list[dict[str, object]], dict[str, object]]:
     active_component_ids = {
         component_id
@@ -487,6 +543,7 @@ def greedy_assign_term_week(
     student_summary_rows: list[dict[str, object]] = []
     assignment_counter: Counter[tuple[str, str]] = Counter()
     active_assignment_counter: Counter[tuple[str, str]] = Counter()
+    used_capacity_by_component: Counter[str] = Counter()
 
     total_requested_pairs = 0
     total_active_requested_pairs = 0
@@ -516,6 +573,12 @@ def greedy_assign_term_week(
                     option
                     for option in options
                     if option_fits_schedule(option, scheduled_component_ids, components)
+                    and option_fits_capacity(
+                        option,
+                        scheduled_component_ids=scheduled_component_ids,
+                        used_capacity_by_component=used_capacity_by_component,
+                        capacity_by_component=capacity_by_component,
+                    )
                 ]
                 max_active_components = max((len(option.active_component_ids) for option in options), default=0)
                 candidate_rows.append((len(feasible_options), -max_active_components, course_id, feasible_options))
@@ -543,7 +606,12 @@ def greedy_assign_term_week(
                 key=lambda option: (-len(option.active_component_ids), option.config_id),
             )
             assigned_course_options[course_id] = chosen_option
+            new_component_ids = [component_id for component_id in chosen_option.active_component_ids if component_id not in scheduled_component_ids]
             scheduled_component_ids.update(chosen_option.active_component_ids)
+            for component_id in new_component_ids:
+                component_capacity = capacity_by_component.get(component_id)
+                if component_capacity is not None:
+                    used_capacity_by_component[component_id] += 1
             total_assigned_pairs += 1
             assignment_counter[(course_id, chosen_option.config_id)] += 1
             if chosen_option.active_component_ids:
@@ -606,6 +674,10 @@ def greedy_assign_term_week(
         ),
         "students_with_removed_pairs": sum(row["removed_courses"] > 0 for row in student_summary_rows),
         "distinct_removed_courses": len({row["course_id"] for row in removed_pairs}),
+        "capacity_constrained_components_in_week": sum(
+            component_id in active_component_ids and capacity_by_component.get(component_id) is not None
+            for component_id in components
+        ),
     }
     return assignments_by_student, removed_pairs, student_summary_rows, course_assignment_rows, summary_row
 
@@ -613,7 +685,9 @@ def greedy_assign_term_week(
 def validate_student_assignments(
     assignments_by_student: dict[str, dict[str, WeeklyCourseOption]],
     components: dict[str, MergedComponent],
+    capacity_by_component: dict[str, int | None] | None = None,
 ) -> None:
+    attendance_counter: Counter[str] = Counter()
     for student_id, course_assignments in assignments_by_student.items():
         scheduled_component_ids = set()
         for option in course_assignments.values():
@@ -626,6 +700,290 @@ def validate_student_assignments(
                             f"components {component_id} and {scheduled_component_id}."
                         )
                 scheduled_component_ids.add(component_id)
+        for component_id in scheduled_component_ids:
+            attendance_counter[component_id] += 1
+    if capacity_by_component is None:
+        return
+    for component_id, used_capacity in attendance_counter.items():
+        component_capacity = capacity_by_component.get(component_id)
+        if component_capacity is not None and used_capacity > component_capacity:
+            raise ValueError(
+                f"Greedy assignment exceeded capacity on component {component_id}: "
+                f"{used_capacity} > {component_capacity}."
+            )
+
+
+def resolve_lancs_instance_path(instance_arg: str | Path | None) -> Path:
+    if instance_arg is None:
+        return DEFAULT_INSTANCE_PATH
+    candidate = Path(instance_arg)
+    if candidate.exists():
+        return candidate
+    if candidate.suffix == ".xml":
+        default_path = DEFAULT_INSTANCE_PATH.parent / candidate.name
+    else:
+        default_path = DEFAULT_INSTANCE_PATH.parent / f"{candidate.name}.xml"
+    if default_path.exists():
+        return default_path
+    raise ValueError(f"Could not find Lancaster XML for '{instance_arg}'.")
+
+
+def build_term_capacity_by_component(
+    term_week: TermWeek,
+    components: dict[str, MergedComponent],
+    halls_by_room_id: dict[str, Hall],
+) -> dict[str, int | None]:
+    capacity_by_component: dict[str, int | None] = {}
+    for component_id, component in components.items():
+        if (
+            term_week.selected_week_index >= len(component.weeks)
+            or component.weeks[term_week.selected_week_index] != "1"
+            or component.room_id is None
+        ):
+            capacity_by_component[component_id] = None
+            continue
+        capacity_by_component[component_id] = halls_by_room_id[component.room_id].capacity
+    return capacity_by_component
+
+
+def build_component_attendees(
+    assignments_by_student: dict[str, dict[str, WeeklyCourseOption]],
+) -> dict[str, tuple[int, ...]]:
+    attendees_by_component: dict[str, set[int]] = defaultdict(set)
+    for student_id, course_assignments in assignments_by_student.items():
+        student_component_ids: set[str] = set()
+        for option in course_assignments.values():
+            student_component_ids.update(option.active_component_ids)
+        student_id_int = int(student_id)
+        for component_id in student_component_ids:
+            attendees_by_component[component_id].add(student_id_int)
+    return {
+        component_id: tuple(sorted(student_ids))
+        for component_id, student_ids in attendees_by_component.items()
+    }
+
+
+def build_term_daily_records(
+    term_week: TermWeek,
+    *,
+    components: dict[str, MergedComponent],
+    component_attendees: dict[str, tuple[int, ...]],
+    room_id_to_hall_id: dict[str, int],
+    source_day: int | None,
+) -> dict[int, list[dict[str, object]]]:
+    daily_records: dict[int, list[dict[str, object]]] = defaultdict(list)
+    for component_id, component in components.items():
+        if (
+            term_week.selected_week_index >= len(component.weeks)
+            or component.weeks[term_week.selected_week_index] != "1"
+            or component.room_id is None
+        ):
+            continue
+        student_ids = component_attendees.get(component_id, ())
+        hall_id = room_id_to_hall_id[component.room_id]
+        assignment_penalties = {
+            room_id_to_hall_id[room_id]: penalty
+            for room_id, penalty in component.room_penalties_by_room_id.items()
+            if room_id in room_id_to_hall_id
+        }
+        compatibility = tuple(sorted(assignment_penalties))
+        if hall_id not in assignment_penalties:
+            raise ValueError(
+                f"Merged component {component_id} has hidden room {component.room_id} outside its common compatibility set."
+            )
+        for day_index, is_active in enumerate(component.days):
+            if is_active != "1":
+                continue
+            if source_day is not None and day_index != source_day:
+                continue
+            daily_records[day_index].append(
+                {
+                    "source_component_id": component_id,
+                    "day_index": day_index,
+                    "start_slot_in_day": component.start,
+                    "duration": component.length,
+                    "start_slot": component.start,
+                    "end_slot": component.end,
+                    "students": len(student_ids),
+                    "student_ids": student_ids,
+                    "hidden_hall": hall_id,
+                    "compatibility": compatibility,
+                    "assignment_penalties": assignment_penalties,
+                }
+            )
+    return dict(daily_records)
+
+
+def build_day_lectures_from_merged_records(
+    day_records: list[dict[str, object]],
+) -> tuple[list[Lecture], dict[int, list[int]], dict[int, dict[int, int]], dict[int, tuple[int, ...]]]:
+    sorted_records = sorted(
+        day_records,
+        key=lambda record: (
+            int(record["start_slot"]),
+            int(record["end_slot"]),
+            str(record["source_component_id"]),
+        ),
+    )
+
+    lectures: list[Lecture] = []
+    compatibility: dict[int, list[int]] = {}
+    assignment_penalties: dict[int, dict[int, int]] = {}
+    lecture_students: dict[int, tuple[int, ...]] = {}
+    for lecture_id, record in enumerate(sorted_records):
+        source_component_id = str(record["source_component_id"])
+        lectures.append(
+            Lecture(
+                lecture_id=lecture_id,
+                name=f"merged_component_{source_component_id}",
+                subject="LANCS_MERGED",
+                study_year=1,
+                is_compulsory=True,
+                day=0,
+                start_slot_in_day=int(record["start_slot_in_day"]),
+                duration=int(record["duration"]),
+                start_slot=int(record["start_slot"]),
+                end_slot=int(record["end_slot"]),
+                students=int(record["students"]),
+                hidden_hall=int(record["hidden_hall"]),
+            )
+        )
+        compatibility[lecture_id] = list(record["compatibility"])  # type: ignore[arg-type]
+        assignment_penalties[lecture_id] = dict(record["assignment_penalties"])  # type: ignore[arg-type]
+        lecture_students[lecture_id] = tuple(record["student_ids"])  # type: ignore[arg-type]
+
+    return lectures, compatibility, assignment_penalties, lecture_students
+
+
+def load_lancs_yr23_term_instances(
+    instance: str | Path | None = None,
+    *,
+    source_day: int | None = None,
+    short_break_slots: int | None = None,
+    capacity_fix: bool = True,
+    term_peak_ratio: float = 0.5,
+    substantial_week_ratio: float = 0.5,
+) -> list[Instance]:
+    instance_path = resolve_lancs_instance_path(instance)
+    root = parse_xml(instance_path)
+
+    halls, room_id_to_hall_id, distances = build_halls_and_distances(root)
+    halls_by_room_id = {room_id: halls[hall_id] for room_id, hall_id in room_id_to_hall_id.items()}
+    components, class_to_component, _, _ = build_sameclass_components(root)
+    course_configs = build_course_configs(root, class_to_component)
+    student_requests = build_student_requests(root)
+    travel_map = build_travel_map(root)
+    validate_merged_zero_penalty_timetable(root, components, class_to_component, travel_map)
+
+    nr_weeks = int(root.get("nrWeeks", "0"))
+    slots_per_day = int(root.get("slotsPerDay", "0"))
+    raw_slot_minutes = 1440.0 / slots_per_day if slots_per_day else 0.0
+    optimization_element = root.find("optimization")
+    time_weight = int(optimization_element.get("time", "0")) if optimization_element is not None else 0
+
+    term_weeks = identify_term_weeks(
+        active_room_components_by_week(components, nr_weeks),
+        term_peak_ratio=term_peak_ratio,
+        substantial_week_ratio=substantial_week_ratio,
+    )
+    if len(term_weeks) != 2:
+        raise ValueError(f"Expected to identify two main teaching terms, found {len(term_weeks)}.")
+
+    instances: list[Instance] = []
+    for term_week in term_weeks:
+        capacity_by_component = build_term_capacity_by_component(term_week, components, halls_by_room_id)
+        assignments_by_student, _, _, _, _ = greedy_assign_term_week(
+            term_week,
+            student_requests,
+            course_configs,
+            components,
+            capacity_by_component,
+        )
+        validate_student_assignments(assignments_by_student, components, capacity_by_component)
+        component_attendees = build_component_attendees(assignments_by_student)
+        daily_records = build_term_daily_records(
+            term_week,
+            components=components,
+            component_attendees=component_attendees,
+            room_id_to_hall_id=room_id_to_hall_id,
+            source_day=source_day,
+        )
+        if short_break_slots is None:
+            selected_short_break_slots, successor_gap_inference_mode = infer_short_break_slots(
+                daily_records,
+                raw_slot_minutes,
+            )
+        else:
+            if short_break_slots < 0:
+                raise ValueError("short_break_slots must be nonnegative.")
+            selected_short_break_slots = short_break_slots
+            successor_gap_inference_mode = "explicit"
+
+        for day_index, day_records in sorted(daily_records.items()):
+            if not day_records:
+                continue
+            lectures, compatibility, assignment_penalties, lecture_students = build_day_lectures_from_merged_records(day_records)
+            adjusted_student_counts = None
+            capacity_fix_changed_lectures = 0
+            if capacity_fix:
+                (
+                    adjusted_lectures,
+                    adjusted_compatibility,
+                    adjusted_assignment_penalties,
+                    adjusted_student_counts,
+                    capacity_fix_changed_lectures,
+                ) = apply_capacity_fix(
+                    lectures,
+                    halls,
+                    compatibility,
+                    assignment_penalties,
+                )
+            else:
+                adjusted_lectures = lectures
+                adjusted_compatibility = compatibility
+                adjusted_assignment_penalties = assignment_penalties
+
+            common_students = build_common_students(
+                lectures,
+                lecture_students,
+                max_gap_slots=selected_short_break_slots,
+                adjusted_student_counts=adjusted_student_counts,
+            )
+            instance_name = (
+                f"{instance_path.stem}_term{term_week.term_index}_week{term_week.selected_week_index + 1}"
+                f"_day{day_index + 1}"
+            )
+            instances.append(
+                build_instance_from_components(
+                    seed=stable_seed_from_text(instance_name),
+                    instance_name=instance_name,
+                    instance_family="lancs_yr23",
+                    halls=halls,
+                    lectures=adjusted_lectures,
+                    distances=distances,
+                    common_students=common_students,
+                    compatibility=adjusted_compatibility,
+                    slots_per_day=slots_per_day,
+                    days_per_week=1,
+                    density_target=None,
+                    assignment_penalties=adjusted_assignment_penalties,
+                    assignment_penalty_type="itc2019_room_penalty",
+                    fixed_input_time_penalty=0.0,
+                    fixed_input_time_weight=time_weight,
+                    fixed_input_time_penalty_allocation="merged_zero_penalty_weekly_schedule",
+                    raw_slot_minutes=raw_slot_minutes,
+                    selected_week_index=term_week.selected_week_index,
+                    week_selection_mode=f"lancs_term{term_week.term_index}_auto_first_substantial",
+                    successor_max_gap_slots=selected_short_break_slots,
+                    successor_max_gap_minutes=selected_short_break_slots * raw_slot_minutes,
+                    successor_gap_inference_mode=successor_gap_inference_mode,
+                    capacity_fix_applied=capacity_fix,
+                    capacity_fix_changed_lectures=capacity_fix_changed_lectures,
+                    capacity_fix_mode="greedy_capacity_and_hidden_hall_fix" if capacity_fix else "disabled",
+                )
+            )
+
+    return instances
 
 
 def write_workbook(
@@ -647,6 +1005,8 @@ def write_workbook(
 def main() -> None:
     args = parse_args()
     root = parse_xml(args.instance)
+    halls, room_id_to_hall_id, _ = build_halls_and_distances(root)
+    halls_by_room_id = {room_id: halls[hall_id] for room_id, hall_id in room_id_to_hall_id.items()}
 
     components, class_to_component, sameclass_constraint_count, component_sizes = build_sameclass_components(root)
     course_configs = build_course_configs(root, class_to_component)
@@ -671,13 +1031,15 @@ def main() -> None:
 
     merged_class_count = sum(len(component.member_class_ids) for component in components.values())
     for term_week in term_weeks:
+        capacity_by_component = build_term_capacity_by_component(term_week, components, halls_by_room_id)
         assignments_by_student, term_removed_pairs, term_student_rows, term_course_rows, term_summary = greedy_assign_term_week(
             term_week,
             student_requests,
             course_configs,
             components,
+            capacity_by_component,
         )
-        validate_student_assignments(assignments_by_student, components)
+        validate_student_assignments(assignments_by_student, components, capacity_by_component)
         term_summary.update(
             {
                 "sameclass_constraints": sameclass_constraint_count,

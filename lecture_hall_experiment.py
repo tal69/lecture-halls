@@ -25,6 +25,7 @@ from ortools.sat.python import cp_model
 
 from lecture_hall_instance_builder import FREE_WASTE_RATIO, min_students_without_waste_penalty
 from lecture_hall_models import CapacityDominanceCut, Hall, Instance, Lecture
+from prepare_lancs_yr23_greedy_terms import load_lancs_yr23_term_instances
 from prepare_itc2019_inputs import load_itc2019_day_instances
 from synthetic_instance_generator import build_synthetic_instance
 
@@ -40,7 +41,7 @@ def parse_args() -> argparse.Namespace:
         "--source",
         dest="source",
         type=str,
-        choices=("synthetic", "itc2019"),
+        choices=("synthetic", "itc2019", "lancs_yr23"),
         default="synthetic",
         help="Input source. Default: synthetic.",
     )
@@ -221,11 +222,20 @@ def validate_args(args: argparse.Namespace) -> None:
             raise SystemExit("--slots-per-day must be at least 4 because lectures last 2-4 slots.")
         if not 0 < args.density <= 1:
             raise SystemExit("--density must be in (0, 1].")
-    else:
+    elif args.source == "itc2019":
         if not args.itc_instance:
             raise SystemExit("--itc-instance is required when --source itc2019 is used.")
         if args.itc_week_index is not None and args.itc_week_index < 0:
             raise SystemExit("--itc-week-index must be nonnegative.")
+        if args.itc_day is not None and args.itc_day < 0:
+            raise SystemExit("--itc-day must be nonnegative.")
+        if args.itc_short_break_slots is not None and args.itc_short_break_slots < 0:
+            raise SystemExit("--itc-short-break-slots must be nonnegative.")
+    else:
+        if args.itc_week_index is not None:
+            raise SystemExit("--itc-week-index is not supported when --source lancs_yr23 is used.")
+        if args.itc_solution is not None:
+            raise SystemExit("--itc-solution is not supported when --source lancs_yr23 is used.")
         if args.itc_day is not None and args.itc_day < 0:
             raise SystemExit("--itc-day must be nonnegative.")
         if args.itc_short_break_slots is not None and args.itc_short_break_slots < 0:
@@ -2104,11 +2114,25 @@ def load_run_instances(args: argparse.Namespace) -> list[tuple[str, Instance]]:
             run_instances.append((f"seed{seed}", instance))
         return run_instances
 
+    if args.source == "itc2019":
+        try:
+            instances = load_itc2019_day_instances(
+                args.itc_instance,
+                solution=args.itc_solution,
+                week_index=args.itc_week_index,
+                source_day=args.itc_day,
+                short_break_slots=args.itc_short_break_slots,
+                capacity_fix=args.itc_capacity_fix,
+            )
+        except ValueError as error:
+            raise SystemExit(str(error))
+        if not instances:
+            raise SystemExit("No active ITC 2019 day instances were loaded.")
+        return [(instance.instance_name, instance) for instance in instances]
+
     try:
-        instances = load_itc2019_day_instances(
+        instances = load_lancs_yr23_term_instances(
             args.itc_instance,
-            solution=args.itc_solution,
-            week_index=args.itc_week_index,
             source_day=args.itc_day,
             short_break_slots=args.itc_short_break_slots,
             capacity_fix=args.itc_capacity_fix,
@@ -2116,7 +2140,7 @@ def load_run_instances(args: argparse.Namespace) -> list[tuple[str, Instance]]:
     except ValueError as error:
         raise SystemExit(str(error))
     if not instances:
-        raise SystemExit("No active ITC 2019 day instances were loaded.")
+        raise SystemExit("No active lancs_yr23 day instances were loaded.")
     return [(instance.instance_name, instance) for instance in instances]
 
 
