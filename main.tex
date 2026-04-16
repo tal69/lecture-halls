@@ -7,6 +7,7 @@
 \usepackage{tikz-cd}
 \usepackage{multicol}
 \usepackage[round,authoryear]{natbib}
+\usepackage{hyperref}
 
 \newtheorem{theorem}{Theorem}
 \newtheorem{proposition}[theorem]{Proposition}
@@ -138,7 +139,7 @@ Thus both exact hardness and approximation hardness follow from the same reducti
 
 
 \section{Models and algorithms}
-This section presents three complementary exact modeling views of the lecture-hall assignment problem. We begin with a natural nonlinear integer programming formulation, then derive a compact mixed-integer programming reformulation, and finally present a constraint-programming formulation that captures the assignment structure directly. After these three base formulations, we describe several modeling improvements that can be layered on top of them, including clique-based overlap handling, valid inequalities, pair-distance strengthening, and safe compatibility preprocessing.
+This section presents three complementary exact modeling views of the lecture-hall assignment problem. We begin with a natural nonlinear integer programming formulation, then derive a compact mixed-integer programming reformulation, and finally present a constraint-programming formulation that captures the assignment structure directly. After these three base formulations, we describe several modeling improvements that can be layered on top of them, including clique-based overlap handling, valid inequalities, bi-clique cuts, and safe compatibility preprocessing.
 
 For notational convenience, define
 \[
@@ -221,8 +222,8 @@ Then the objective in \eqref{eq:cpsat-obj} can be replaced by
 \end{equation}
 and the relation \eqref{eq:cp-z-def} can be encoded in CP-SAT by an element constraint or an allowed-assignment table.
 
-\subsection{Modeling improvements}  \label{subsec:Modeling-improvements}
-Several enhancements can be layered on top of the three base formulations without changing the underlying problem. Some of them are common to all three modeling views, while others are specific to the compact pair-distance reformulation and its CP analogue.
+{\tiny }\subsection{Modeling improvements}  \label{subsec:Modeling-improvements}
+Several enhancements can be layered on top of the three base formulations without changing the underlying problem. Some of them are common to all three modeling views, while others are specific to the compact MIP reformulation and its CP analogue.
 
 \paragraph{Clique-based overlap representation.}
 The clique representation introduced in \eqref{eq:nlp-overlap} is exact. If one starts instead from slot-indexed constraints, then for every time unit $t$ the active lecture set $L(t)$ forms a clique in the interval graph, and therefore is contained in a maximal clique. Conversely, by the Helly property of intervals, every clique of an interval graph has a common intersection point, so each maximal clique corresponds to a set of lectures that are simultaneously active at some time. Hence keeping only the maximal active sets is equivalent to the full family of slot-indexed non-overlap constraints. In many practical timetables, and especially in discretized slot-based data such as the instances generated here, it is very common that each time step induces a unique maximal active set. In that case the maximal cliques are particularly easy to identify: one simply scans the time steps, records the active lectures at each step, and removes duplicate or inclusion-wise dominated sets. Even when several consecutive time steps map to the same maximal clique, this scan-based identification remains trivial. In the nonlinear and compact MIP formulations, writing the room-capacity constraints by maximal cliques eliminates redundant slot-indexed inequalities without weakening the model. In the CP formulation, one may either post \texttt{AllDifferent} on the slot-active sets $L(t)$ or on maximal cliques; the latter is strongest in general, while in slot-based generated instances the two views are typically nearly identical in practice because each slot usually induces a unique maximal active set.
@@ -242,51 +243,14 @@ Every lecture $l \in L_\kappa(C)$ has $H(l) \subseteq H_\kappa$ by the capacity 
 \end{equation}
 Because $|L_\kappa(C)|$ and $|H_\kappa|$ depend only on the input data, the cut is an explicit linear inequality in the assignment variables whose right-hand side is a pre-computed nonnegative integer. It states that once the $|L_\kappa(C)|$ largest lectures of the clique have claimed their share of the $|H_\kappa|$ halls whose capacity exceeds $\kappa$, the remaining lectures in $C$ may collectively occupy at most $|H_\kappa|-|L_\kappa(C)|$ of the large halls. Only threshold values $\kappa$ that coincide with distinct hall capacities need to be instantiated, so the family contains at most $|\mathcal{C}_d| \cdot |\{u_h : h \in H\}|$ inequalities per day. The cut is a Chv\'atal--Gomory consequence of~\eqref{eq:nlp-assign}--\eqref{eq:nlp-overlap} and is therefore valid for every integer-feasible solution of the nonlinear, MIP, and CP formulations alike. In the nonlinear and compact MIP formulations it can be added directly as a linear inequality in the assignment variables. In the CP formulation it can be represented by Boolean indicators that record whether a lecture is assigned to a hall in $H_\kappa$, followed by the corresponding redundant cardinality bound. If preprocessing is applied beforehand, the cut can be posted on the reduced compatibility sets without modification.
 
-\paragraph{Pair-distance strengthening.}
-The next family of improvements is specific to the compact pair-distance view. In the nonlinear formulation these constraints are unnecessary, because the quadratic objective already encodes the exact pair contribution directly. In the compact MIP reformulation, however, the basic linking constraints \eqref{eq:milp-link3} can be strengthened by exploiting the fact that each lecture is assigned to exactly one hall. One valid inequality is
+\paragraph{Bi-clique cuts.}
+The next family of improvements is specific to the compact MIP reformulation. Fix a pair $(l_1,l_2) \in A'$  and  a pair of halls  $h_1 \in H(l_1)$ and $h_2 \in H(l_2)$, let $S_1 \subseteq H(l_1)$ and $S_2 \subseteq H(l_2)$  such that $d_{h'_1,h'_2} \ge d_{h_1,h_2} $ for every $h'_1 \in S_1$ and $h'_2 \in S_2$. Then the following inequality is valid:
 \begin{equation}
-z_{l_1 l_2} \ge d_{h_1,h_2}\bigl(x_{l_1 h_1} -1 +  \sum_{h: d_{h_1,h} \ge d_{h_1,h_2}}  x_{l_2 h} \bigr), \qquad \forall (l_1,l_2) \in A',  h_1 \in H(l_1), h_2 \in H(l_2). \label{eq:milp-link-strong}
+    z_{l_1 l_2} \ge d_{h_1,h_2}\!\left(\sum_{h'_1 \in S_1} x_{l_1 h'_1} + \sum_{h'_2 \in S_2} x_{l_2 h'_2} - 1\right),
+    \qquad \forall (l_1,l_2) \in A', h_1 \in H(l_1), h_2  \in H(l_2) .
+    \label{eq:milp-link-biclique}
 \end{equation}
-Fix $(l_1,l_2)$, $h_1$, and $h_2$, and consider any integer-feasible solution. If $x_{l_1 h_1}=0$, then the term in parentheses is at most zero, because $\sum_h x_{l_2 h}=1$ and therefore $\sum_{h: d_{h_1,h} \ge d_{h_1,h_2}} x_{l_2 h} \le 1$. In that case \eqref{eq:milp-link-strong} is implied by the nonnegativity of $z_{l_1 l_2}$. Now suppose that $x_{l_1 h_1}=1$, and let $g$ be the unique hall assigned to $l_2$. Then the summation term is equal to $1$ if $d_{h_1,g} \ge d_{h_1,h_2}$ and $0$ otherwise. Hence the right-hand side of \eqref{eq:milp-link-strong} is either $0$ or $d_{h_1,h_2}$. In the latter case, the realized distance is $d_{h_1,g}$, and since $d_{h_1,g} \ge d_{h_1,h_2}$ by construction, inequality \eqref{eq:milp-link-strong} is satisfied. Therefore it cannot cut off any integer-feasible assignment, although it may cut fractional solutions and thereby strengthen the linear relaxation.
-
-By symmetry, one may also add
-\begin{equation}
-z_{l_1 l_2} \ge d_{h_1,h_2}\bigl(\sum_{h: d_{h,h_2} \ge d_{h_1,h_2}} x_{l_1 h} -1 + x_{l_2 h_2} \bigr), \qquad \forall (l_1,l_2) \in A',  h_1 \in H(l_1), h_2 \in H(l_2). \label{eq:milp-link-strong-sym}
-\end{equation}
-The same validity argument applies after interchanging the roles of $l_1$ and $l_2$. Hence \eqref{eq:milp-link-strong} and \eqref{eq:milp-link-strong-sym} may be imposed together, potentially yielding a stronger linear relaxation.
-
-The original strong cut can also be enlarged on the $l_1$ side. For fixed $(l_1,l_2)$, $h_1$, and $h_2$, let
-\[
-S_2(h_1,h_2)=\{\,h \in H(l_2) : d_{h_1,h} \ge d_{h_1,h_2}\,\}
-\]
-and define
-\[
-S_1^+(h_1,h_2)=\{\,g \in H(l_1) : d_{g,h} \ge d_{h_1,h_2} \text{ for all } h \in S_2(h_1,h_2)\,\}.
-\]
-Then
-\begin{equation}
-z_{l_1 l_2} \ge d_{h_1,h_2}\left(\sum_{g \in S_1^+(h_1,h_2)} x_{l_1 g} -1 + \sum_{h \in S_2(h_1,h_2)} x_{l_2 h}\right), \qquad \forall (l_1,l_2) \in A',\ h_1 \in H(l_1),\ h_2 \in H(l_2). \label{eq:milp-link-strong-ext}
-\end{equation}
-This inequality is valid because whenever the assigned hall of $l_1$ lies in $S_1^+(h_1,h_2)$ and the assigned hall of $l_2$ lies in $S_2(h_1,h_2)$, every cross-pair between the two sets is at distance at least $d_{h_1,h_2}$. Otherwise the right-hand side of \eqref{eq:milp-link-strong-ext} is nonpositive. Since $h_1 \in S_1^+(h_1,h_2)$, inequality \eqref{eq:milp-link-strong-ext} dominates \eqref{eq:milp-link-strong} pointwise.
-
-The strengthening can in fact be strict on a large family of fractional points. Fix $(l_1,l_2) \in A'$ with $c_{l_1,l_2}>0$, and let $A=\{a_1,\ldots,a_p\} \subseteq H(l_1)$ and $B=\{b_1,\ldots,b_q\} \subseteq H(l_2)$ with $p,q \ge 2$. Assume that $d_{a_i,b_j}=D>0$ for every $a_i \in A$ and $b_j \in B$. Consider the fractional point defined by
-\[
-x_{l_1,a_i}=\frac{1}{p} \quad \forall a_i \in A, \qquad
-x_{l_2,b_j}=\frac{1}{q} \quad \forall b_j \in B,
-\]
-all other assignment variables for $l_1$ and $l_2$ equal to zero, and $z_{l_1 l_2}=0$. Then, for every $a_i \in A$ and $b_j \in B$,
-\[
-x_{l_1,a_i}+x_{l_2,b_j}-1=\frac{1}{p}+\frac{1}{q}-1 \le 0,
-\]
-so all inequalities \eqref{eq:milp-link3} are satisfied. However, for any fixed $a_i \in A$ and $b_j \in B$, one has
-\[
-\sum_{h: d_{a_i,h} \ge d_{a_i,b_j}} x_{l_2 h} \ge \sum_{h \in B} x_{l_2 h}=1,
-\]
-and therefore \eqref{eq:milp-link-strong} implies
-\[
-z_{l_1 l_2} \ge D\left(\frac{1}{p}-1+1\right)=\frac{D}{p}>0,
-\]
-which contradicts $z_{l_1 l_2}=0$. Hence \eqref{eq:milp-link-strong} cuts off an infinite family of fractional solutions that remain feasible under \eqref{eq:milp-link3}. When the lower-level CP encoding with the auxiliary variables $z_{l_1 l_2}$ is used, the same distance-threshold logic can be translated into redundant propagation constraints by introducing set-membership indicators for hall domains and enforcing lower bounds on $z_{l_1 l_2}$ whenever the two assigned halls fall into the corresponding threshold sets. In practice, the extended one-sided family \eqref{eq:milp-link-strong-ext} is the most natural candidate for such a CP propagation layer.
+If the assigned hall of $l_1$ lies in $S_1$ and that of $l_2$ lies in $S_2$, then both summations equal 1 and \eqref{eq:milp-link-biclique} forces $z_{l_1 l_2} \ge d_{h_1,h_2}$, which is correct since the realized distance is at least $d_{h_1,h_2}$. Otherwise the right-hand side is nonpositive and the cut is implied by the nonnegativity of $z_{l_1 l_2}$. The basic constraints \eqref{eq:milp-link3} are the special case $S_1 = \{h_1\}$ and $S_2 = \{h_2\}$;  taking larger bi-cliques yields strictly stronger cuts that can separate fractional solutions satisfying all pairwise constraints. In practice, the sets $S_1$ and $S_2$ are constructed by fixing an anchor pair $(h_1, h_2) \in H(l_1) \times H(l_2)$, setting $S_2 = \{h \in H(l_2) : d_{h_1,h} \ge d_{h_1,h_2}\}$, and then setting $S_1$ to every hall in $H(l_1)$ at distance at least $d_{h_1,h_2}$ from every element of $S_2$.   In particular $h_1\in S_1$ and $h_2 \in S_2$. When the lower-level CP encoding with auxiliary variables $z_{l_1 l_2}$ is used, the same logic can be translated into propagation constraints enforcing lower bounds on $z_{l_1 l_2}$ whenever the two assigned halls fall into the corresponding threshold sets.
 
 \paragraph{Compatibility preprocessing.}
 A final improvement shrinks the compatibility sets $H(l)$ before solving any of the three formulations. Fix a target lecture $l' \in L$ and consider the auxiliary problem
@@ -346,7 +310,7 @@ In the hard case, the compatible room sets of the two classes can be reduced to 
 H'(l_1)=H'(l_2)=H(l_1) \cap H(l_2).
 \]
 
-Alternatively, suppose that SameRoom is a soft constraint for a pair of classes $l_1,l_2$, with penalty $\pi_{l_1,l_2}$ if the two classes are assigned to different rooms. Let $C_1^{soft}$ be the set of such pairs, and for each pair introduce a binary variable $v_{l_1,l_2}$ that equals $1$ when the constraint is violated. A linear encoding for the MIP and MIPQ formulations is
+Alternatively, suppose that SameRoom is a soft constraint for a pair of classes $l_1,l_2$, with penalty $\pi_{l_1,l_2}$ if the two classes are assigned to different rooms. Let $C_1^{soft}$ be the set of such pairs, and for each pair introduce a binary variable $v_{l_1,l_2}$ that equals $1$ when the constraint is violated. A linear encoding for the MIP formulation is
 \begin{equation}
 	\label{eq:soft-SameRoom-a} v_{l_1,l_2} \ge x_{l_1,h} - x_{l_2,h} \qquad \forall (l_1,l_2) \in C_1^{soft},\ h \in H(l_1) \cap H(l_2),
 \end{equation}
@@ -363,7 +327,14 @@ The corresponding penalty term
 \[
 \sum_{(l_1,l_2) \in C_1^{soft}} \pi_{l_1,l_2} v_{l_1,l_2}
 \]
-is then added to the objective function. Implementation of the soft SameRoom constraint in the CP model is more straightforward: one may simply add the term
+is then added to the objective function. In the nonlinear MIPQ formulation, one may avoid the auxiliary variables entirely and add the direct bilinear penalty
+\[
+\sum_{(l_1,l_2) \in C_1^{soft}} \pi_{l_1,l_2}
+\left(
+1-\sum_{h \in H(l_1)\cap H(l_2)} x_{l_1h}x_{l_2h}
+\right).
+\]
+Because each lecture is assigned to exactly one hall, the inner sum equals $1$ if and only if the two lectures use the same compatible hall, and equals $0$ otherwise, so this term is exactly the SameRoom violation penalty. Implementation of the soft SameRoom constraint in the CP model is more straightforward: one may simply add the term
 \[
 \sum_{(l_1,l_2) \in C_1^{soft}} \pi_{l_1,l_2}\,[a_{l_1} \ne a_{l_2}]
 \]
@@ -390,7 +361,7 @@ If the two classes overlap in time, then every room pair is forbidden. The hard 
 \end{equation}
 In the CP model, one may equivalently forbid the assignments in $F_{l_1,l_2}$ directly.
 
-Now let $C_2^{soft}$ be the set of soft SameAttendees pairs, with penalty $\rho_{l_1,l_2}$ for violating pair $(l_1,l_2)$. Introduce a binary variable $u_{l_1,l_2}$ that equals $1$ when the chosen room pair belongs to $F_{l_1,l_2}$. Then the MIP and MIPQ models can enforce
+Now let $C_2^{soft}$ be the set of soft SameAttendees pairs, with penalty $\rho_{l_1,l_2}$ for violating pair $(l_1,l_2)$. Introduce a binary variable $u_{l_1,l_2}$ that equals $1$ when the chosen room pair belongs to $F_{l_1,l_2}$. Then the MIP model can enforce
 \begin{equation}
 	\label{eq:soft-SameAttendees}
 	u_{l_1,l_2} \ge x_{l_1,h_1}+x_{l_2,h_2}-1
@@ -400,25 +371,30 @@ and add the penalty term
 \[
 \sum_{(l_1,l_2)\in C_2^{soft}} \rho_{l_1,l_2} u_{l_1,l_2}
 \]
-to the objective. In the CP model, the same logic can be implemented by a reified table constraint that links the chosen room pair to a binary violation indicator.
-
-The pairwise formulations above can be strengthened without introducing additional variables. Let $S \subseteq H(l_1)$ and $T \subseteq H(l_2)$ be such that
+to the objective. In the nonlinear MIPQ formulation, the same penalty can be written directly as
 \[
-S \times T \subseteq F_{l_1,l_2}.
+\sum_{(l_1,l_2)\in C_2^{soft}} \rho_{l_1,l_2}
+\sum_{(h_1,h_2)\in F_{l_1,l_2}} x_{l_1,h_1}x_{l_2,h_2}.
+\]
+Because exactly one room pair is selected for $(l_1,l_2)$, the inner sum is a binary indicator of whether the chosen pair belongs to $F_{l_1,l_2}$. This avoids both auxiliary variables and the accompanying linking inequalities in the MIPQ model. In the CP model, the same logic can be implemented by a reified table constraint that links the chosen room pair to a binary violation indicator.
+
+In the MIP model, the pairwise formulations above can be strengthened using another set biclique constraints. Let $S_1 \subseteq H(l_1)$ and $S_2 \subseteq H(l_2)$ be such that
+\[
+S_1 \times S_2 \subseteq F_{l_1,l_2}.
 \]
 Then every assignment that places $l_1$ in a room from $S$ and $l_2$ in a room from $T$ necessarily violates SameAttendees. Hence the following aggregated inequalities are valid:
 \begin{equation}
 	\label{eq:hard-SameAttendees-biclique}
-	\sum_{h_1 \in S} x_{l_1,h_1} + \sum_{h_2 \in T} x_{l_2,h_2} \le 1
-	\qquad \forall (l_1,l_2)\in C_2^{hard},\ S\times T \subseteq F_{l_1,l_2},
+	\sum_{h_1 \in S_1} x_{l_1,h_1} + \sum_{h_2 \in S_2} x_{l_2,h_2} \le 1
+	\qquad \forall (l_1,l_2)\in C_2^{hard},\ S_1\times S_2 \subseteq F_{l_1,l_2},
 \end{equation}
 and
 \begin{equation}
 	\label{eq:soft-SameAttendees-biclique}
-	u_{l_1,l_2} \ge \sum_{h_1 \in S} x_{l_1,h_1} + \sum_{h_2 \in T} x_{l_2,h_2} - 1
-	\qquad \forall (l_1,l_2)\in C_2^{soft},\ S\times T \subseteq F_{l_1,l_2}.
+	u_{l_1,l_2} \ge \sum_{h_1 \in S_1} x_{l_1,h_1} + \sum_{h_2 \in S_2} x_{l_2,h_2} - 1
+	\qquad \forall (l_1,l_2)\in C_2^{soft},\ S_1\times S_2 \subseteq F_{l_1,l_2}.
 \end{equation}
-These inequalities dominate the basic pairwise constraints whenever $|S|>1$ or $|T|>1$. In the implementation, the extended cut mode constructs such sets by starting from one anchor room of $l_1$, collecting all rooms of $l_2$ that are forbidden with that anchor, and then enlarging the $l_1$-side set to every room that is incompatible with the entire resulting set on the $l_2$ side. This is directly analogous in spirit to the extended distance cuts used for the quadratic walking term.
+These inequalities dominate the basic pairwise constraints whenever $|S_1|>1$ or $|S_2|>1$. In the implementation, the extended cut mode constructs such sets by starting from one anchor room of $l_1$, collecting all rooms of $l_2$ that are forbidden with that anchor, and then enlarging the $l_1$-side set to every room that is incompatible with the entire resulting set on the $l_2$ side. This is directly analogous in spirit to the extended distance cuts used for the quadratic walking term. These aggregated inequalities are useful for the linearized MIP and for the CP reified encoding; in the nonlinear MIPQ formulation, the soft SameAttendees penalties are represented directly by bilinear objective terms instead.
 
 Hard SameRoom and SameAttendees constraints can also be incorporated into the compatibility preprocessing step described in Section \ref{subsec:Modeling-improvements}.
 
@@ -429,25 +405,20 @@ In this section we evaluate the computational behavior of the proposed formulati
 
 The numerical study address four main questions: (i) how much stronger the compact MIP reformulation is than the baseline nonlinear model, (ii) how much the valid inequalities improve the linear relaxation and the branch-and-bound performance, (iii) how effective the preprocessing procedures are in shrinking the compatibility sets and accelerating solution, and (iv) how the MIP and CP approaches compare on instances of various sizes and densities.
 
-\subsection{Synthetic instance generator}
-The numerical study relies on a synthetic instance generator implemented in the accompanying code base. The purpose of this generator is not to reproduce one specific university in all operational details, but rather to create controlled benchmark instances that preserve the structural drivers of the lecture-hall assignment problem: heterogeneous room sizes, fixed-time overlap patterns, cohort-based demand, sparse but meaningful successor relations, and compatibility sets that are neither trivial nor artificially restrictive. Since the problem is separable by day, every generated instance represents a single teaching day. This keeps the benchmark focused on the intrinsic daily assignment difficulty without any loss of generality relative to a weekly formulation.
-
-The generator first creates the halls. Each hall is assigned a capacity drawn from a broad range and a location in a two-dimensional campus plane. Inter-hall distances are then obtained from scaled Euclidean distances and rounded upward to integers. This construction reflects two practical considerations. First, universities typically operate a heterogeneous stock of classrooms and lecture halls, so uniform room capacities would understate the assignment difficulty. Second, a geometric distance model yields a coherent metric structure, which is more realistic than an arbitrary distance matrix and better aligned with the interpretation of the objective as walking effort across campus.
-
-Next, the generator creates a fixed lecture timetable. Let $\delta \in (0,1]$ denote the target density, interpreted as the fraction of available hall-time slots that should be occupied by lectures. The total occupied volume is therefore chosen as approximately $\delta |H||T|$, where $|T|$ is the number of time slots in the single day. This occupied volume is decomposed into lecture durations of $2$, $3$, or $4$ consecutive slots and then packed into hall-day bins. Within each bin, random idle gaps are inserted between lectures. The use of a density parameter makes the benchmark scalable in a transparent way: increasing $\delta$ simultaneously increases room contention and the size of the overlap graph. Restricting durations to a small range of moderate lengths is also practically reasonable, since most university teaching activities are neither one-slot micro-events nor all-day blocks.
-
-Each generated lecture is then assigned an academic identity consisting of a subject, a study year, and a compulsory/elective flag. In the current implementation, subjects are balanced across a fixed list of disciplines, study years are balanced across four cohorts, and approximately $70\%$ of lectures are designated compulsory. The balance requirement prevents degenerate instances in which one subject or one year dominates the benchmark purely by chance. More importantly, the generator imposes a cohort-overlap rule: for any fixed subject-year cohort and time slot, there may be at most one compulsory lecture, or at most two elective lectures, but not both simultaneously. This rule encodes a common curricular reality. Compulsory offerings for a cohort are usually scheduled so as not to conflict with each other, whereas a small amount of parallelism among electives is realistic and even desirable.
-
-The implementation contains a two-level fallback mechanism to enforce these curriculum rules robustly on dense instances. First, the generator computes the maximum simultaneous lecture volume implied by the cohort system itself. With the current choice of eight subjects and four study years, there are $32$ cohorts, so the overlap rule permits at most $64$ active lectures in any slot. If the requested density would force more lecture-slots than this concurrency cap allows, the instance request is declared infeasible immediately rather than being passed to a downstream routine that would inevitably fail. Second, even when the requested density is globally feasible, a particular random packing of lecture durations into the day may still create an overly congested slot pattern or a timetable for which the greedy attribute assignment gets stuck. In that case the code first tries a small exact CP-SAT feasibility model for the balanced attribute-assignment subproblem. If that still fails, the timetable layout itself is redrawn and the process is repeated. This safeguard has a methodological purpose: hard benchmark instances should arise from the optimization problem, not from accidental inconsistencies in the synthetic curriculum generator.
-
-After the timetable structure is fixed, the generator simulates student demand rather than drawing lecture sizes independently. This choice is important because the objective depends on shared enrollments between consecutive lectures, so generating only lecture sizes would miss the main source of quadratic coupling. The code first estimates the size of each subject-year cohort from the capacities of its compulsory offerings. Intuitively, compulsory lectures anchor the scale of a cohort better than electives do, because they are the courses that most students in the cohort are expected to attend. The generator then simulates individual student journeys through the day. Students almost always attend compulsory lectures of their own cohort, attend home-cohort electives with moderate probability, only occasionally attend previous-year electives in the same subject, and only very rarely attend electives from another subject. When several candidate electives are available, the choice is weighted by a lecture-specific popularity factor and by the remaining hidden room capacity. This produces three desirable effects simultaneously: large core classes emerge naturally, elective demand is split across parallels, and successor weights are concentrated on academically plausible lecture pairs rather than spread uniformly across the timetable.
-
-The generator also introduces a latent or hidden hall for each lecture during the data-creation stage. This hidden hall is used only to shape the simulated demand and is not revealed to the optimizer as a prescribed assignment. After student journeys are simulated, lecture attendance is tightened upward toward the capacity of the hidden hall. Compulsory lectures are pushed to a higher occupancy band than electives, and lecture sizes are also kept above the next smaller capacity tier whenever possible. The practical motivation is to avoid synthetic instances in which most lectures are far smaller than the rooms that can host them. Without this tightening step, the compatibility sets would often be excessively large, the capacity constraints would be weak, and the wasted-space penalty would rarely matter. The tightening procedure therefore preserves feasibility while making room choice consequential, which is exactly the regime in which lecture-hall assignment is operationally interesting.
-
-Finally, the benchmark data used by the optimization models are derived from the simulated attendance. For each lecture $l$, the compatibility set $H(l)$ contains all halls whose capacity is at least the final attendance of $l$. For each pair of lectures $(l_1,l_2)$, the common-student weight $c_{l_1,l_2}$ is defined by the number of simulated students who attend $l_1$ and then $l_2$ in immediately consecutive time slots on the same day. This ensures that the successor relation is sparse and behaviorally grounded: only lecture pairs that arise naturally from student schedules receive positive walking weight. In the extended objective used in the code, each compatible assignment $(l,h)$ also receives a penalty for severe under-utilization of the hall. The penalty is zero as long as at least $90\%$ of the hall is filled, and it then increases quadratically with the number of excess empty seats beyond that threshold. This reflects the practical view that assigning a class to a slightly oversized room may be acceptable, whereas assigning it to a much larger room becomes increasingly undesirable.
-
 \subsection{Test instances}
-The experiments should therefore use a synthetic benchmark family generated from controlled ranges of the main difficulty parameters: the number of halls, the target density, and the random seed. A natural design is to test several hall-set sizes, such as $10$, $20$, $30$, $40$, and $50$ halls, together with several density levels and a common seed set for each parameter combination. This produces a benchmark collection in which the effect of scale and congestion can be analyzed separately from pure random variation. If institutional data become available, a final subsection may report results on one or more realistic instances using the same methodology and use the synthetic family primarily for controlled stress testing.
+
+Our real-world test set is derived from two XML data sources: one instance from the ITC 2019 university course timetabling benchmark \citep{muller2025itc2019} and a 2023 institutional dataset from the University of Lancaster that was kindly provided to us by Matthew Davison, the first author of \citet{davison2025}. In both sources, the original room set, room capacities, and room-to-room distances are retained, and the weekly timetabling data are transformed into daily lecture-hall assignment instances because the optimization model is separable by day whenever no cross-day side constraints are enforced. The resulting benchmark therefore preserves realistic room heterogeneity and authentic side-constraint structure while isolating the daily room-assignment subproblem studied in this paper.
+
+The ITC 2019 repository contains 36 real-world timetabling instances in total, namely 30 competition benchmarks and 6 test instances \citep{muller2025itc2019}. We use instance from Purdue, spring term of 2007 (denoted in the repository as \texttt{pu-c8-spr07}). The instance belongs to the test set and is posted together with the best timetable available in the ITC2019 contest repository, see \url{https://www.itc2019.org/}. Among the instances that provide explicit room-to-room walking distances, the Purdue instance is the largest, which is why we selected it for the present study. The timetable psoted in thw website is attributed in the XML metadata to Tom{\'a}\v{s} M{\"u}ller. We use this timetable as the underlying timetable from which room assignments and student flows are extracted. Since the ITC data describe a full semester in which the exact weekly timetable may vary over time, our instance-construction procedure selects the most loaded teaching week, where load is measured by the number of active room-requiring classes in the published timetable. For \texttt{pu-c8-spr07}, this rule selects week~2. The selected week is then decomposed into one instance per active day. For each day, the data-transformation pipeline keeps the original room-assignment penalties from the ITC XML, extracts the hard and soft \emph{SameRoom} pairs and the hard \emph{SameAttendees} pairs, and constructs the successor relation from the student-course records using an automatically inferred short-break threshold. The current implementation also applies the default ITC capacity correction whenever the published timetable places a class in a room smaller than the reported class size; in that case the class size is reduced to the assigned room capacity before compatibility sets are built. This produces five daily ITC instances, all with the same 213 halls, with between 726 and 953 lectures per day and between 698 and 3{,}352 positive successor pairs.
+
+For the Lancaster instances, we use the actual timetable and anonymized student registration data used at the University of Lancaster in 2023, which we obtained directly from Matthew Davison. We gratefully acknowledge Matthew Davison for sharing these data with us. Here the construction is less direct because the institutional data contain weekly course configurations and also \emph{SameClass} groups. In the XML semantics, a \emph{SameClass} relation indicates that several class identifiers are administrative representations of one and the same teaching activity and are therefore required to share exactly the same scheduled time and room. In the Lancaster 2023 data, such duplicated representations arise from institutional formalities, so our preprocessing pipeline contracts each \emph{SameClass} component into one representative activity before any room-assignment instance is generated. This consolidation is essential to avoid artificial duplication of decision variables for what is, operationally, a single lecture.
+
+After this consolidation step, the Lancaster pipeline identifies the two main teaching terms and, within each term, selects the most loaded teaching week, where load is measured by the number of active room-requiring merged activities. In the present data this rule selects week~13 for term~1 and week~28 for term~2. Student registrations are then projected onto the selected week and repaired to obtain a consistent flow-based room-assignment instance. Two small adjustments are required. First, the merged weekly timetable is used to eliminate formal duplicate activities created by the \emph{SameClass} representation just discussed. Second, a small number of students are registered to more than one class at the same time; This is an artifact of university formality that require registering a student to a class that they do not physcally attend just to enable theie access to the course online material or to allow them attend the final exam . Because such simultaneous registrations do not induce a meaningful movement pattern between rooms, and because the quadratic objective relies precisely on a well-defined flow of students between consecutive lectures, these conflicting registrations are broken by removing the student from one of the overlapping classes. The cleaned weekly registrations are then mapped to daily lecture records, and the hard and soft side constraints are inherited from the original XML after mapping through the merged components. In the resulting Lancaster instances there are hard and soft \emph{SameAttendees} constraints but no remaining \emph{SameRoom} constraints. This yields ten daily Lancaster instances, all with 660 halls, with between 243 and 510 lectures per day and between 117 and 389 positive successor pairs.
+
+Overall, the real-world benchmark family used in the numerical study contains 15 daily instances: five Purdue spring 2007 days and ten Lancaster days. The two sources are complementary. The Purdue instance is tighter in its timetable-driven side constraints and much denser in immediate-successor structure, whereas the Lancaster instances are built from a much larger hall set and from cleaned weekly registration data that are projected into a flow network of consecutive student movements. Together they provide a useful test bed for assessing the robustness of the MIPQ, MIP, and CP formulations across materially different academic data-generation pipelines.
+
+It should be noted that while both datset were previously used as benchmarks instances for the university course timetabeling problem that includes among other decision assignment of classes to rooms, the result from the literature are not comparable because none of the previous studies consider an objective that includes the quadratic assiggbment component, i.e., minimizing the total walking distances of the students. While, we can calculate the walking distance of the students from the solutions psted by previus studies, it would not be fare to compare our optimal solutions to those obtained by algorithms that optimized a different objective function. 
+
 
 \subsection{Compared formulations and algorithmic variants}
 The comparison should include at least the following variants:
@@ -473,5 +444,27 @@ This subsection should document the hardware, solver versions, parameter setting
 
 \bibliographystyle{plainnat}
 \bibliography{refs}
+\appendix
+
+\section{Synthetic instance generator}
+The numerical study relies on a synthetic instance generator implemented in the accompanying code base. The purpose of this generator is not to reproduce one specific university in all operational details, but rather to create controlled benchmark instances that preserve the structural drivers of the lecture-hall assignment problem: heterogeneous room sizes, fixed-time overlap patterns, cohort-based demand, sparse but meaningful successor relations, and compatibility sets that are neither trivial nor artificially restrictive. Since the problem is separable by day, every generated instance represents a single teaching day. This keeps the benchmark focused on the intrinsic daily assignment difficulty without any loss of generality relative to a weekly formulation.
+
+The generator first creates the halls. Each hall is assigned a capacity drawn from a broad range and a location in a two-dimensional campus plane. Inter-hall distances are then obtained from scaled Euclidean distances and rounded upward to integers. This construction reflects two practical considerations. First, universities typically operate a heterogeneous stock of classrooms and lecture halls, so uniform room capacities would understate the assignment difficulty. Second, a geometric distance model yields a coherent metric structure, which is more realistic than an arbitrary distance matrix and better aligned with the interpretation of the objective as walking effort across campus.
+
+Next, the generator creates a fixed lecture timetable. Let $\delta \in (0,1]$ denote the target density, interpreted as the fraction of available hall-time slots that should be occupied by lectures. The total occupied volume is therefore chosen as approximately $\delta |H||T|$, where $|T|$ is the number of time slots in the single day. This occupied volume is decomposed into lecture durations of $2$, $3$, or $4$ consecutive slots and then packed into hall-day bins. Within each bin, random idle gaps are inserted between lectures. The use of a density parameter makes the benchmark scalable in a transparent way: increasing $\delta$ simultaneously increases room contention and the size of the overlap graph. Restricting durations to a small range of moderate lengths is also practically reasonable, since most university teaching activities are neither one-slot micro-events nor all-day blocks.
+
+Each generated lecture is then assigned an academic identity consisting of a subject, a study year, and a compulsory/elective flag. In the current implementation, subjects are balanced across a fixed list of disciplines, study years are balanced across four cohorts, and approximately $70\%$ of lectures are designated compulsory. The balance requirement prevents degenerate instances in which one subject or one year dominates the benchmark purely by chance. More importantly, the generator imposes a cohort-overlap rule: for any fixed subject-year cohort and time slot, there may be at most one compulsory lecture, or at most two elective lectures, but not both simultaneously. This rule encodes a common curricular reality. Compulsory offerings for a cohort are usually scheduled so as not to conflict with each other, whereas a small amount of parallelism among electives is realistic and even desirable.
+
+The implementation contains a two-level fallback mechanism to enforce these curriculum rules robustly on dense instances. First, the generator computes the maximum simultaneous lecture volume implied by the cohort system itself. With the current choice of eight subjects and four study years, there are $32$ cohorts, so the overlap rule permits at most $64$ active lectures in any slot. If the requested density would force more lecture-slots than this concurrency cap allows, the instance request is declared infeasible immediately rather than being passed to a downstream routine that would inevitably fail. Second, even when the requested density is globally feasible, a particular random packing of lecture durations into the day may still create an overly congested slot pattern or a timetable for which the greedy attribute assignment gets stuck. In that case the code first tries a small exact CP-SAT feasibility model for the balanced attribute-assignment subproblem. If that still fails, the timetable layout itself is redrawn and the process is repeated. This safeguard has a methodological purpose: hard benchmark instances should arise from the optimization problem, not from accidental inconsistencies in the synthetic curriculum generator.
+
+After the timetable structure is fixed, the generator simulates student demand rather than drawing lecture sizes independently. This choice is important because the objective depends on shared enrollments between consecutive lectures, so generating only lecture sizes would miss the main source of quadratic coupling. The code first estimates the size of each subject-year cohort from the capacities of its compulsory offerings. Intuitively, compulsory lectures anchor the scale of a cohort better than electives do, because they are the courses that most students in the cohort are expected to attend. The generator then simulates individual student journeys through the day. Students almost always attend compulsory lectures of their own cohort, attend home-cohort electives with moderate probability, only occasionally attend previous-year electives in the same subject, and only very rarely attend electives from another subject. When several candidate electives are available, the choice is weighted by a lecture-specific popularity factor and by the remaining hidden room capacity. This produces three desirable effects simultaneously: large core classes emerge naturally, elective demand is split across parallels, and successor weights are concentrated on academically plausible lecture pairs rather than spread uniformly across the timetable.
+
+The generator also introduces a latent or hidden hall for each lecture during the data-creation stage. This hidden hall is used only to shape the simulated demand and is not revealed to the optimizer as a prescribed assignment. After student journeys are simulated, lecture attendance is tightened upward toward the capacity of the hidden hall. Compulsory lectures are pushed to a higher occupancy band than electives, and lecture sizes are also kept above the next smaller capacity tier whenever possible. The practical motivation is to avoid synthetic instances in which most lectures are far smaller than the rooms that can host them. Without this tightening step, the compatibility sets would often be excessively large, the capacity constraints would be weak, and the wasted-space penalty would rarely matter. The tightening procedure therefore preserves feasibility while making room choice consequential, which is exactly the regime in which lecture-hall assignment is operationally interesting.
+
+Finally, the benchmark data used by the optimization models are derived from the simulated attendance. For each lecture $l$, the compatibility set $H(l)$ contains all halls whose capacity is at least the final attendance of $l$. For each pair of lectures $(l_1,l_2)$, the common-student weight $c_{l_1,l_2}$ is defined by the number of simulated students who attend $l_1$ and then $l_2$ in immediately consecutive time slots on the same day. This ensures that the successor relation is sparse and behaviorally grounded: only lecture pairs that arise naturally from student schedules receive positive walking weight. In the extended objective used in the code, each compatible assignment $(l,h)$ also receives a penalty for severe under-utilization of the hall. The penalty is zero as long as at least $90\%$ of the hall is filled, and it then increases quadratically with the number of excess empty seats beyond that threshold. This reflects the practical view that assigning a class to a slightly oversized room may be acceptable, whereas assigning it to a much larger room becomes increasingly undesirable.
+
+
+
+
 
 \end{document}
