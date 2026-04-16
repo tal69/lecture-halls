@@ -221,7 +221,7 @@ Then the objective in \eqref{eq:cpsat-obj} can be replaced by
 \end{equation}
 and the relation \eqref{eq:cp-z-def} can be encoded in CP-SAT by an element constraint or an allowed-assignment table.
 
-\subsection{Modeling improvements}
+\subsection{Modeling improvements}  \label{subsec:Modeling-improvements}
 Several enhancements can be layered on top of the three base formulations without changing the underlying problem. Some of them are common to all three modeling views, while others are specific to the compact pair-distance reformulation and its CP analogue.
 
 \paragraph{Clique-based overlap representation.}
@@ -355,7 +355,9 @@ Implementation of the soft SameRoom constraint in the CP model is more strightfo
 
 An important cavity is that the SameRoom constraint in both of its hard and soft form are typically applicable for entire weekly timetable. E.g., class A given at Monday should be assigned to the same room of class B given on Wendsday. If one wish to enforece such constraint, the problem is no more decoposible to days and one should solve the entire week (and perhapse the entire term) simulataniously.
 
-Another common timetabling side constraint in the litrature that is also applicable to our room assignment problem (altough in more restriceted sense)  is the SameAtendee constaint. When adapted to the language of our setting, SameAtendee constraint limites the walking distance between two given classes. For example, the distance between the room to which $l_1$ is assigned and the room of $l_2$ cannot be greater then a given threshold.  The threshold represent an upper bound on the possible walkable distance given the end time of $l_1$ and the starting time of $l_2$, which are given as input in the room assignment problem.  SameAtendee constraints (both hard and soft) can be easily included in the models preseneted above.
+Another common timetabling side constraint in the litrature that is also applicable to our room assignment problem (altough in more restriceted sense)  is the SameAtendee constaint. When adapted to the language of our setting, SameAtendee constraint limites the walking distance between two given classes. For example, the distance between the room to which $l_1$ is assigned and the room of $l_2$ cannot be greater then a given threshold.  The threshold represent an upper bound on the possible walkable distance given the end time of $l_1$ and the starting time of $l_2$, which are given as input in the room assignment problem.  SameAtendee constraints (both hard and soft) can be easily included in the models preseneted above.   
+
+The hard SameRoom and SameAttendee constraint can also be included the compatability prepeocessing step described in Section \ref{subsec:Modeling-improvements}.
 
 
 
