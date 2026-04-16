@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
+from dataclasses import replace
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
@@ -233,6 +234,10 @@ def infer_short_break_slots(
     return default_short_break_slots(raw_slot_minutes), "fallback_10_minutes"
 
 
+def round_nonnegative(value: float) -> int:
+    return int(value + 0.5)
+
+
 def get_unique_duration(class_id: str, class_info: dict[str, object], solution_class: ET.Element) -> int:
     key = (
         solution_class.get("days", ""),
@@ -382,10 +387,55 @@ def build_day_lectures(
     return lectures, compatibility, assignment_penalties, lecture_students
 
 
+def apply_capacity_fix(
+    lectures: list[Lecture],
+    halls: list[Hall],
+    compatibility: dict[int, list[int]],
+    assignment_penalties: dict[int, dict[int, int]],
+) -> tuple[list[Lecture], dict[int, list[int]], dict[int, dict[int, int]], dict[int, int], int]:
+    hall_capacity_by_id = {hall.hall_id: hall.capacity for hall in halls}
+    adjusted_lectures: list[Lecture] = []
+    adjusted_compatibility: dict[int, list[int]] = {}
+    adjusted_assignment_penalties: dict[int, dict[int, int]] = {}
+    adjusted_student_counts: dict[int, int] = {}
+    changed_lecture_count = 0
+
+    for lecture in lectures:
+        assigned_capacity = hall_capacity_by_id[lecture.hidden_hall]
+        adjusted_students = min(lecture.students, assigned_capacity)
+        adjusted_student_counts[lecture.lecture_id] = adjusted_students
+        if adjusted_students != lecture.students:
+            changed_lecture_count += 1
+        adjusted_lectures.append(replace(lecture, students=adjusted_students))
+        filtered_halls = [
+            hall_id
+            for hall_id in compatibility[lecture.lecture_id]
+            if hall_capacity_by_id[hall_id] >= adjusted_students
+        ]
+        if not filtered_halls:
+            raise ValueError(
+                f"Capacity fix removed all compatible halls for lecture {lecture.lecture_id}."
+            )
+        adjusted_compatibility[lecture.lecture_id] = filtered_halls
+        adjusted_assignment_penalties[lecture.lecture_id] = {
+            hall_id: assignment_penalties[lecture.lecture_id][hall_id]
+            for hall_id in filtered_halls
+        }
+
+    return (
+        adjusted_lectures,
+        adjusted_compatibility,
+        adjusted_assignment_penalties,
+        adjusted_student_counts,
+        changed_lecture_count,
+    )
+
+
 def build_common_students(
     lectures: list[Lecture],
     lecture_students: dict[int, tuple[int, ...]],
     max_gap_slots: int,
+    adjusted_student_counts: dict[int, int] | None = None,
 ) -> dict[tuple[int, int], int]:
     student_lectures: dict[int, list[Lecture]] = defaultdict(list)
     for lecture in lectures:
@@ -400,7 +450,34 @@ def build_common_students(
             if 0 <= gap <= max_gap_slots:
                 key = (lecture_1.lecture_id, lecture_2.lecture_id)
                 common_students[key] = common_students.get(key, 0) + 1
-    return common_students
+    if adjusted_student_counts is None:
+        return common_students
+
+    original_student_counts = {lecture.lecture_id: lecture.students for lecture in lectures}
+    scaled_common_students: dict[tuple[int, int], int] = {}
+    for (lecture_id_1, lecture_id_2), common_count in common_students.items():
+        original_1 = original_student_counts[lecture_id_1]
+        original_2 = original_student_counts[lecture_id_2]
+        scale_1 = (
+            adjusted_student_counts[lecture_id_1] / original_1
+            if original_1 > 0
+            else 1.0
+        )
+        scale_2 = (
+            adjusted_student_counts[lecture_id_2] / original_2
+            if original_2 > 0
+            else 1.0
+        )
+        scaled_common_count = round_nonnegative(common_count * min(scale_1, scale_2))
+        scaled_common_count = min(
+            scaled_common_count,
+            adjusted_student_counts[lecture_id_1],
+            adjusted_student_counts[lecture_id_2],
+            common_count,
+        )
+        if scaled_common_count > 0:
+            scaled_common_students[(lecture_id_1, lecture_id_2)] = scaled_common_count
+    return scaled_common_students
 
 
 def load_itc2019_day_instances(
@@ -410,6 +487,7 @@ def load_itc2019_day_instances(
     week_index: int | None = None,
     source_day: int | None = None,
     short_break_slots: int | None = None,
+    capacity_fix: bool = True,
 ) -> list[Instance]:
     instance_path = resolve_instance_path(instance)
     solution_path = resolve_solution_path(instance_path, solution)
@@ -459,10 +537,31 @@ def load_itc2019_day_instances(
         if not day_records:
             continue
         lectures, compatibility, assignment_penalties, lecture_students = build_day_lectures(day_records)
+        adjusted_student_counts = None
+        capacity_fix_changed_lectures = 0
+        if capacity_fix:
+            (
+                adjusted_lectures,
+                adjusted_compatibility,
+                adjusted_assignment_penalties,
+                adjusted_student_counts,
+                capacity_fix_changed_lectures,
+            ) = apply_capacity_fix(
+                lectures,
+                halls,
+                compatibility,
+                assignment_penalties,
+            )
+        else:
+            adjusted_lectures = lectures
+            adjusted_compatibility = compatibility
+            adjusted_assignment_penalties = assignment_penalties
+
         common_students = build_common_students(
             lectures,
             lecture_students,
             max_gap_slots=selected_short_break_slots,
+            adjusted_student_counts=adjusted_student_counts,
         )
         instance_name = f"{instance_path.stem}_week{selected_week_index + 1}_day{day_index + 1}"
         fixed_input_time_penalty = sum(float(record["time_penalty_share"]) for record in day_records)
@@ -472,14 +571,14 @@ def load_itc2019_day_instances(
                 instance_name=instance_name,
                 instance_family="itc2019",
                 halls=halls,
-                lectures=lectures,
+                lectures=adjusted_lectures,
                 distances=distances,
                 common_students=common_students,
-                compatibility=compatibility,
+                compatibility=adjusted_compatibility,
                 slots_per_day=slots_per_day,
                 days_per_week=1,
                 density_target=None,
-                assignment_penalties=assignment_penalties,
+                assignment_penalties=adjusted_assignment_penalties,
                 assignment_penalty_type="itc2019_room_penalty",
                 fixed_input_time_penalty=fixed_input_time_penalty,
                 fixed_input_time_weight=time_weight,
@@ -490,6 +589,9 @@ def load_itc2019_day_instances(
                 successor_max_gap_slots=selected_short_break_slots,
                 successor_max_gap_minutes=selected_short_break_slots * raw_slot_minutes,
                 successor_gap_inference_mode=successor_gap_inference_mode,
+                capacity_fix_applied=capacity_fix,
+                capacity_fix_changed_lectures=capacity_fix_changed_lectures,
+                capacity_fix_mode="reduce_students_and_filter_compatibility" if capacity_fix else "disabled",
             )
         )
 
@@ -517,6 +619,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional successor gap threshold in raw ITC slots. When omitted, it is inferred automatically.",
     )
+    parser.add_argument(
+        "--no-capacity-fix",
+        dest="capacity_fix",
+        action="store_false",
+        help="Disable the default ITC capacity fix.",
+    )
     return parser.parse_args()
 
 
@@ -528,6 +636,7 @@ def main() -> None:
         week_index=args.week_index,
         source_day=args.source_day,
         short_break_slots=args.short_break_slots,
+        capacity_fix=args.capacity_fix,
     )
     if not instances:
         print("No active room-requiring day instances found.")
@@ -536,7 +645,8 @@ def main() -> None:
         print(
             f"{instance.instance_name}: halls={instance.num_halls}, lectures={len(instance.lectures)}, "
             f"successor_pairs={len(instance.common_students)}, density={instance.density_actual:.3f}, "
-            f"week={instance.selected_week_index + 1}, short_break_slots={instance.successor_max_gap_slots}"
+            f"week={instance.selected_week_index + 1}, short_break_slots={instance.successor_max_gap_slots}, "
+            f"capacity_fix={instance.capacity_fix_applied}, changed={instance.capacity_fix_changed_lectures}"
         )
 
 

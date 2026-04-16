@@ -113,6 +113,12 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--no-capacity-fix",
+        dest="itc_capacity_fix",
+        action="store_false",
+        help="Disable the default ITC capacity fix that reduces oversized lectures to their assigned room capacity.",
+    )
+    parser.add_argument(
         "--time-limit",
         "--time_limit",
         dest="time_limit",
@@ -1565,6 +1571,9 @@ def build_summary_rows(
                 "successor_max_gap_slots": instance.successor_max_gap_slots,
                 "successor_max_gap_minutes": instance.successor_max_gap_minutes,
                 "successor_gap_inference_mode": instance.successor_gap_inference_mode,
+                "capacity_fix_applied": instance.capacity_fix_applied,
+                "capacity_fix_changed_lectures": instance.capacity_fix_changed_lectures,
+                "capacity_fix_mode": instance.capacity_fix_mode,
                 "fixed_input_time_penalty": instance.fixed_input_time_penalty,
                 "fixed_input_time_weight": instance.fixed_input_time_weight,
                 "fixed_input_weighted_time_penalty": instance.fixed_input_weighted_time_penalty,
@@ -1707,6 +1716,11 @@ def instance_to_json_dict(instance: Instance) -> dict[str, Any]:
             "max_gap_slots": instance.successor_max_gap_slots,
             "max_gap_minutes": instance.successor_max_gap_minutes,
             "inference_mode": instance.successor_gap_inference_mode,
+        },
+        "capacity_fix": {
+            "applied": instance.capacity_fix_applied,
+            "changed_lectures": instance.capacity_fix_changed_lectures,
+            "mode": instance.capacity_fix_mode,
         },
         "assignment_penalty": assignment_penalty,
         "fixed_input_penalties": {
@@ -1917,6 +1931,12 @@ def print_instance_console_view(instance: Instance, json_path: Path) -> None:
             f"successor gap <= {instance.successor_max_gap_slots} slots "
             f"({instance.successor_max_gap_minutes:.3f} minutes, {instance.successor_gap_inference_mode})"
         )
+        print(
+            "ITC capacity fix: "
+            f"applied={instance.capacity_fix_applied}, "
+            f"changed lectures={instance.capacity_fix_changed_lectures}, "
+            f"mode={instance.capacity_fix_mode}"
+        )
     print(
         "Structure: "
         f"successor pairs={len(instance.common_students)}/{candidate_successors}, "
@@ -2091,6 +2111,7 @@ def load_run_instances(args: argparse.Namespace) -> list[tuple[str, Instance]]:
             week_index=args.itc_week_index,
             source_day=args.itc_day,
             short_break_slots=args.itc_short_break_slots,
+            capacity_fix=args.itc_capacity_fix,
         )
     except ValueError as error:
         raise SystemExit(str(error))

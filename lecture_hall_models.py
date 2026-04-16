@@ -67,6 +67,9 @@ class Instance:
     successor_max_gap_slots: int = 0
     successor_max_gap_minutes: float = 0.0
     successor_gap_inference_mode: str = "exact"
+    capacity_fix_applied: bool = False
+    capacity_fix_changed_lectures: int = 0
+    capacity_fix_mode: str = "none"
 
 
 @dataclass(frozen=True)

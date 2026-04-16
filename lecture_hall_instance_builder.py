@@ -82,6 +82,9 @@ def build_instance_from_components(
     successor_max_gap_slots: int = 0,
     successor_max_gap_minutes: float = 0.0,
     successor_gap_inference_mode: str = "exact",
+    capacity_fix_applied: bool = False,
+    capacity_fix_changed_lectures: int = 0,
+    capacity_fix_mode: str = "none",
 ) -> Instance:
     if assignment_penalties is None:
         assignment_penalties = build_assignment_penalties(lectures, halls, compatibility)
@@ -125,4 +128,7 @@ def build_instance_from_components(
         successor_max_gap_slots=successor_max_gap_slots,
         successor_max_gap_minutes=successor_max_gap_minutes,
         successor_gap_inference_mode=successor_gap_inference_mode,
+        capacity_fix_applied=capacity_fix_applied,
+        capacity_fix_changed_lectures=capacity_fix_changed_lectures,
+        capacity_fix_mode=capacity_fix_mode,
     )
