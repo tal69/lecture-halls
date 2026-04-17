@@ -296,14 +296,14 @@ Second, soft penalties can be added for hall-feature mismatch and wasted capacit
 \end{align}
 These additional terms are linear in the assignment variables, so they preserve the quadratic-plus-linear structure of the model. Consequently, the compact MILP reformulation is obtained simply by adding the same linear terms to \eqref{eq:milp-obj}, while keeping all linking constraints and valid inequalities unchanged. Likewise, in the CP model one may add per-lecture assignment costs indexed by the chosen hall. Thus these extensions move the model closer to practical hall-allocation settings while preserving the exact-solution framework developed in this paper.
 
-The timetabling literature also considers several side constraints that may be relevant for the quadratic hall-assignment problem and can be accommodated by the three models above. In particular, the ITC 2019 competition model includes a \emph{SameHall} constraint requiring two lectures, scheduled at non-overlapping times, to be assigned to the same hall \citep{muller2025itc2019}. This constraint can be formulated either as a hard constraint that must be satisfied by every feasible solution or as a soft constraint with an associated violation penalty.
-Let $C_1^{hard}$ be the set of lecture pairs for which a hard SameHall constraint is imposed. Then the following MIP and MIPQ constraints express it:
+The timetabling literature also considers several side constraints that may be relevant for the quadratic hall-assignment problem and can be accommodated by the three models above. In particular, the ITC 2019 competition model includes a \emph{SameRoom} constraint requiring two lectures, scheduled at non-overlapping times, to be assigned to the same hall \citep{muller2025itc2019}. This constraint can be formulated either as a hard constraint that must be satisfied by every feasible solution or as a soft constraint with an associated violation penalty.
+Let $C_1^{hard}$ be the set of lecture pairs for which a hard SameRoom constraint is imposed. Then the following MIP and MIPQ constraints express it:
 \begin{equation}
-	\label{eq:hard-SameHall} x_{l_1,h} = x_{l_2,h}     \qquad \forall (l_1,l_2) \in C_1^{hard}, h \in H(l_1) \cap H(l_2),
+	\label{eq:hard-SameRoom} x_{l_1,h} = x_{l_2,h}     \qquad \forall (l_1,l_2) \in C_1^{hard}, h \in H(l_1) \cap H(l_2),
 \end{equation}
 and for the CP formulation it is even more straightforward:
 \begin{equation}
-	\label{eq:hard-SameHall-CP} a_{l_1} = a_{l_2}     \qquad \forall (l_1,l_2) \in C_1^{hard}
+	\label{eq:hard-SameRoom-CP} a_{l_1} = a_{l_2}     \qquad \forall (l_1,l_2) \in C_1^{hard}
 \end{equation}
 
 In the hard case, the compatible hall sets of the two lectures can be reduced to the intersection of their original feasible sets, that is,
@@ -311,18 +311,18 @@ In the hard case, the compatible hall sets of the two lectures can be reduced to
 H'(l_1)=H'(l_2)=H(l_1) \cap H(l_2).
 \]
 
-Alternatively, suppose that SameHall is a soft constraint for a pair of lectures $l_1,l_2$, with penalty $\pi_{l_1,l_2}$ if the two lectures are assigned to different halls. Let $C_1^{soft}$ be the set of such pairs, and for each pair introduce a binary variable $v_{l_1,l_2}$ that equals $1$ when the constraint is violated. A linear encoding for the MIP formulation is
+Alternatively, suppose that SameRoom is a soft constraint for a pair of lectures $l_1,l_2$, with penalty $\pi_{l_1,l_2}$ if the two lectures are assigned to different halls. Let $C_1^{soft}$ be the set of such pairs, and for each pair introduce a binary variable $v_{l_1,l_2}$ that equals $1$ when the constraint is violated. A linear encoding for the MIP formulation is
 \begin{equation}
-	\label{eq:soft-SameHall-a} v_{l_1,l_2} \ge x_{l_1,h} - x_{l_2,h} \qquad \forall (l_1,l_2) \in C_1^{soft},\ h \in H(l_1) \cap H(l_2),
+	\label{eq:soft-SameRoom-a} v_{l_1,l_2} \ge x_{l_1,h} - x_{l_2,h} \qquad \forall (l_1,l_2) \in C_1^{soft},\ h \in H(l_1) \cap H(l_2),
 \end{equation}
 \begin{equation}
-	\label{eq:soft-SameHall-b} v_{l_1,l_2} \ge x_{l_2,h} - x_{l_1,h} \qquad \forall (l_1,l_2) \in C_1^{soft},\ h \in H(l_1) \cap H(l_2),
+	\label{eq:soft-SameRoom-b} v_{l_1,l_2} \ge x_{l_2,h} - x_{l_1,h} \qquad \forall (l_1,l_2) \in C_1^{soft},\ h \in H(l_1) \cap H(l_2),
 \end{equation}
 \begin{equation}
-	\label{eq:soft-SameHall-c} v_{l_1,l_2} \ge x_{l_1,h} \qquad \forall (l_1,l_2) \in C_1^{soft},\ h \in H(l_1)\setminus H(l_2),
+	\label{eq:soft-SameRoom-c} v_{l_1,l_2} \ge x_{l_1,h} \qquad \forall (l_1,l_2) \in C_1^{soft},\ h \in H(l_1)\setminus H(l_2),
 \end{equation}
 \begin{equation}
-	\label{eq:soft-SameHall-d} v_{l_1,l_2} \ge x_{l_2,h} \qquad \forall (l_1,l_2) \in C_1^{soft},\ h \in H(l_2)\setminus H(l_1).
+	\label{eq:soft-SameRoom-d} v_{l_1,l_2} \ge x_{l_2,h} \qquad \forall (l_1,l_2) \in C_1^{soft},\ h \in H(l_2)\setminus H(l_1).
 \end{equation}
 The corresponding penalty term
 \[
@@ -335,13 +335,13 @@ is then added to the objective function. In the nonlinear MIPQ formulation, one 
 1-\sum_{h \in H(l_1)\cap H(l_2)} x_{l_1h}x_{l_2h}
 \right).
 \]
-Because each lecture is assigned to exactly one hall, the inner sum equals $1$ if and only if the two lectures use the same compatible hall, and equals $0$ otherwise, so this term is exactly the SameHall violation penalty. Implementation of the soft SameHall constraint in the CP model is more straightforward: one may simply add the term
+Because each lecture is assigned to exactly one hall, the inner sum equals $1$ if and only if the two lectures use the same compatible hall, and equals $0$ otherwise, so this term is exactly the SameRoom violation penalty. Implementation of the soft SameRoom constraint in the CP model is more straightforward: one may simply add the term
 \[
 \sum_{(l_1,l_2) \in C_1^{soft}} \pi_{l_1,l_2}\,[a_{l_1} \ne a_{l_2}]
 \]
 using a reification construct that evaluates to $1$ when the logical condition is true and to $0$ otherwise.
 
-An important caveat is that SameHall constraints, in both their hard and soft forms, are typically defined over the full weekly timetable. For example, a lecture given on Monday may be required to use the same hall as a related lecture given on Wednesday. If such cross-day constraints are enforced, the problem is no longer decomposable by day, and one must solve at least the whole week, and possibly the whole term, simultaneously.
+An important caveat is that SameRoom constraints, in both their hard and soft forms, are typically defined over the full weekly timetable. For example, a lecture given on Monday may be required to use the same hall as a related lecture given on Wednesday. If such cross-day constraints are enforced, the problem is no longer decomposable by day, and one must solve at least the whole week, and possibly the whole term, simultaneously.
 
 Another common timetabling side constraint that is also relevant here, albeit in a more restricted sense, is \emph{SameAttendees} \citep{muller2025itc2019}. In the timetabling model, this constraint limits the travel time between two lectures that may share students. In our setting, where event times are fixed in advance, it becomes a restriction on the admissible hall pairs for two given lectures. Let $C_2^{hard}$ be the set of lecture pairs with a hard SameAttendees constraint, and let
 \[
@@ -397,7 +397,7 @@ and
 \end{equation}
 These inequalities dominate the basic pairwise constraints whenever $|S_1|>1$ or $|S_2|>1$. In the implementation, the extended cut mode constructs such sets by starting from one anchor hall of $l_1$, collecting all halls of $l_2$ that are forbidden with that anchor, and then enlarging the $l_1$-side set to every hall that is incompatible with the entire resulting set on the $l_2$ side. This is directly analogous in spirit to the extended distance cuts used for the quadratic walking term. These aggregated inequalities are useful for the linearized MIP and for the CP reified encoding; in the nonlinear MIPQ formulation, the soft SameAttendees penalties are represented directly by bilinear objective terms instead.
 
-Hard SameHall and SameAttendees constraints can also be incorporated into the compatibility preprocessing step described in Section \ref{subsec:Modeling-improvements}.
+Hard SameRoom and SameAttendees constraints can also be incorporated into the compatibility preprocessing step described in Section \ref{subsec:Modeling-improvements}.
 
 
 
@@ -412,7 +412,7 @@ Our real-world benchmark is derived from the ITC 2019 university course timetabl
 
 The ITC 2019 repository contains 36 real-world timetabling instances, namely 30 competition instances and 6 test instances \citep{muller2025itc2019}. For the main large-scale experiments we use the five largest competition instances that simultaneously contain a non-trivial hall-distance matrix and explicit student-enrolment data. For each selected ITC source we use a public timetable posted in the ITC 2019 repository as the fixed weekly schedule from which daily hall-assignment instances are extracted. After selecting the peak week, we keep only its five busiest days and drop the weekend, so each ITC source contributes five daily instances. According to the official competition results posted on the ITC 2019 website \citep{itc2019awards}, the winning submissions for the selected instances were due to Dennis S. Holm, Rasmus {\O}. Mikkelsen, Matias S{\o}rensen, and Thomas R. Stidsen for \texttt{muni-pdf-spr16c}, \texttt{pu-proj-fal19}, \texttt{muni-pdfx-fal17}, and \texttt{pu-d9-fal19}, and to Karim Er-rhaimini for \texttt{agh-fal17}. Both winning approaches are documented in solver papers published on the contest website \citep{holm2020itc2019,errhaimini2020itc2019}. Table~\ref{tab:instance_sources} summarizes the selected source instances and the resulting benchmark sizes.
 
-For the University of  Lancaster, we use the actual 2023 timetable and anonymized student-registration data used by Lancaster University. We are grateful to Matthew Davison for making these data available. The Lancaster XML contains \emph{SameLecture} groups, meaning sets of lecture identifiers that are administratively distinct but correspond to the same teaching activity and must therefore share the same time and hall. Our preprocessing pipeline contracts each \emph{SameLecture} component before any hall-assignment instance is created. It then identifies the two main teaching terms and selects the most loaded week within each term, which in the present data are weeks~13 and~28. For each selected term week we again retain only the five most loaded days and discard weekend activity, so the Lancaster source contributes ten daily instances overall. A small number of simultaneous registrations are removed from one of the overlapping lectures so that the induced student-movement relation is well defined for the quadratic objective. After this cleaning, the hard and soft side constraints are inherited from the XML through the merged components; in the resulting Lancaster instances there are hard and soft \emph{SameAttendees} constraints but no remaining \emph{SameHall} constraints.
+For the University of  Lancaster, we use the actual 2023 timetable and anonymized student-registration data used by Lancaster University. We are grateful to Matthew Davison for making these data available. The Lancaster XML contains \emph{SameClass} groups, meaning sets of lecture identifiers that are administratively distinct but correspond to the same teaching activity and must therefore share the same time and hall. Our preprocessing pipeline contracts each \emph{SameClass} component before any hall-assignment instance is created. It then identifies the two main teaching terms and selects the most loaded week within each term, which in the present data are weeks~13 and~28. For each selected term week we again retain only the five most loaded days and discard weekend activity, so the Lancaster source contributes ten daily instances overall. A small number of simultaneous registrations are removed from one of the overlapping lectures so that the induced student-movement relation is well defined for the quadratic objective. After this cleaning, the hard and soft side constraints are inherited from the XML through the merged components; in the resulting Lancaster instances there are hard and soft \emph{SameAttendees} constraints but no remaining \emph{SameRoom} constraints.
 
 \begin{table}[t]
 \centering

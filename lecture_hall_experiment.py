@@ -2638,7 +2638,7 @@ def print_instance_console_view(instance: Instance, json_path: Path) -> None:
             f"soft SameAttendees={len(instance.soft_same_attendees_pairs)}"
         )
     if instance.assignment_penalty_type == "itc2019_room_penalty":
-        print("Penalty: assignment penalties are the ITC 2019 lecture-hall penalties from the instance XML.")
+        print("Penalty: assignment penalties are the ITC 2019 class-room penalties from the instance XML.")
     else:
         print(
             "Penalty: "

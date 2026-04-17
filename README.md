@@ -69,7 +69,7 @@ The script now natively supports loading real-world XML instances from the Inter
 - **Penalties**: Incorporates the exact hall-assignment penalties provided in the original ITC 2019 XML models instead of the synthetic wasted-space penalty.
 
 The repository also supports a Lancaster-specific data-transformation path for `lancs-yr23.xml`.
-- It merges `SameLecture` components into representative activities.
+- It merges `SameClass` components into representative activities.
 - It selects the peak-load week of each of the two main teaching terms.
 - It greedily repairs student registrations subject to merged weekly timetable feasibility and hidden-hall capacities.
 - It then exposes the resulting single-day hall-assignment instances directly to `lecture_hall_experiment.py`.
@@ -91,9 +91,9 @@ Examples for a hall of capacity `100`:
 - lecture size `89`: penalty `1`
 - lecture size `80`: penalty `100`
 
-For synthetic instances, this penalty is generated automatically for every compatible lecture-hall pair and added to the objective in all solver backends (`MIPQ`, `MIP`, and `CP`).
+For synthetic instances, this penalty is generated automatically for every compatible class-room pair and added to the objective in all solver backends (`MIPQ`, `MIP`, and `CP`).
 
-For ITC 2019 instances, the model instead uses the pre-existing assignment penalties defined in the dataset for each lecture-hall pair.
+For ITC 2019 instances, the model instead uses the pre-existing assignment penalties defined in the dataset for each class-room pair.
 
 Determinism note:
 - if the original greedy attribute-assignment path succeeds for a given seed, the generated instance is unchanged by the fallback patch;
