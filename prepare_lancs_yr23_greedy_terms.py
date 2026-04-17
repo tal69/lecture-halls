@@ -918,6 +918,8 @@ def load_lancs_yr23_term_instances(
             successor_gap_inference_mode = "explicit"
 
         for day_index, day_records in sorted(daily_records.items()):
+            if source_day is None and not (0 <= day_index <= 4):
+                continue
             if not day_records:
                 continue
             (

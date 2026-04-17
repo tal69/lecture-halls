@@ -625,7 +625,11 @@ def load_itc2019_day_instances(
     if source_day is not None:
         selected_items = [(source_day, daily_records.get(source_day, []))]
     else:
-        selected_items = sorted(daily_records.items())
+        selected_items = [
+            (day_index, day_records)
+            for day_index, day_records in sorted(daily_records.items())
+            if 0 <= day_index <= 4
+        ]
 
     instances: list[Instance] = []
     for day_index, day_records in selected_items:
@@ -719,7 +723,13 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional 0-based week index. When omitted, the most loaded teaching week is selected.",
     )
-    parser.add_argument("--day", dest="source_day", type=int, default=None, help="Optional 0-based day index.")
+    parser.add_argument(
+        "--day",
+        dest="source_day",
+        type=int,
+        default=None,
+        help="Optional 0-based day index. When omitted, only weekdays 0-4 are used.",
+    )
     parser.add_argument(
         "--short-break-slots",
         dest="short_break_slots",

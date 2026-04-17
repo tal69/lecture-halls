@@ -156,7 +156,7 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help=(
-            "Optional single model to solve: MIPQ, MIP, CP, or ROOT. "
+            "Optional single model to solve: MIPQ, MIP, LP, CP, or ROOT. "
             "When omitted, the script solves the three original models."
         ),
     )
@@ -247,8 +247,8 @@ def validate_args(args: argparse.Namespace) -> None:
         args.model = args.model.upper()
         if args.model == "MIQP":
             args.model = "MIPQ"
-        if args.model not in {"MIPQ", "MIP", "CP", "ROOT"}:
-            raise SystemExit("--model must be one of MIPQ, MIP, CP, or ROOT.")
+        if args.model not in {"MIPQ", "MIP", "LP", "CP", "ROOT"}:
+            raise SystemExit("--model must be one of MIPQ, MIP, LP, CP, or ROOT.")
     if args.instance_only and args.model is not None:
         raise SystemExit("--instance-only cannot be combined with --model.")
 
@@ -1743,6 +1743,69 @@ def solve_gurobi_linearized(
         }
 
 
+def solve_gurobi_linearized_lp(
+    instance: Instance,
+    time_limit: float,
+    cuts: int = 1,
+    verbose: bool = True,
+    cardinality: bool = False,
+) -> dict[str, Any]:
+    wall_start = time.perf_counter()
+    construction_timings = empty_model_construction_timings()
+    thread_limit = gurobi_thread_limit()
+    try:
+        model, _, _, thread_limit, construction_timings = build_gurobi_linearized_model(
+            instance=instance,
+            cuts=cuts,
+            time_limit=time_limit,
+            verbose=verbose,
+            cardinality=cardinality,
+        )
+        lp_model = model.relax()
+        lp_model.Params.OutputFlag = 1 if verbose else 0
+        lp_model.Params.TimeLimit = time_limit
+        lp_model.Params.Threads = thread_limit
+        lp_model.Params.Cuts = 0
+        lp_model.optimize()
+
+        if lp_model.Status == GRB.INTERRUPTED:
+            raise KeyboardInterrupt("Solver interrupted by user")
+
+        wall_seconds = time.perf_counter() - wall_start
+        objective_value = safe_float(lp_model.ObjVal) if lp_model.SolCount > 0 else None
+        return {
+            "solver_family": "GUROBI",
+            "formulation": "linearized_lp",
+            "status": status_name_from_gurobi(lp_model.Status),
+            "objective_value": objective_value,
+            "lower_bound": objective_value,
+            "wall_clock_seconds": wall_seconds,
+            "solver_runtime_seconds": safe_float(lp_model.Runtime),
+            "mip_gap": None,
+            "threads": thread_limit,
+            "cuts_mode": cuts,
+            "error": None,
+            "solution": None,
+            **construction_timings,
+        }
+    except GurobiError as error:
+        return {
+            "solver_family": "GUROBI",
+            "formulation": "linearized_lp",
+            "status": "ERROR",
+            "objective_value": None,
+            "lower_bound": None,
+            "wall_clock_seconds": time.perf_counter() - wall_start,
+            "solver_runtime_seconds": None,
+            "mip_gap": None,
+            "threads": thread_limit,
+            "cuts_mode": cuts,
+            "error": str(error),
+            "solution": None,
+            **construction_timings,
+        }
+
+
 def solve_gurobi_linearized_root(
     instance: Instance,
     time_limit: float,
@@ -2021,6 +2084,8 @@ def preprocessing_infeasible_results(selected_model: str | None, reason: str) ->
         model_specs = [("GUROBI", "quadratic_miqp")]
     elif selected_model == "MIP":
         model_specs = [("GUROBI", "linearized_milp")]
+    elif selected_model == "LP":
+        model_specs = [("GUROBI", "linearized_lp")]
     elif selected_model == "CP":
         model_specs = [("OR_TOOLS", "cp_sat")]
     else:
@@ -2898,6 +2963,16 @@ def main() -> None:
         elif args.model == "MIP":
             results = [
                 solve_gurobi_linearized(
+                    instance,
+                    args.time_limit,
+                    cuts=args.cuts,
+                    verbose=not args.quiet,
+                    cardinality=args.cardinality,
+                ),
+            ]
+        elif args.model == "LP":
+            results = [
+                solve_gurobi_linearized_lp(
                     instance,
                     args.time_limit,
                     cuts=args.cuts,
