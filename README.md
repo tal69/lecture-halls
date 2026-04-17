@@ -152,6 +152,13 @@ python lecture_hall_experiment.py \
     --instance-only
 ```
 
+### Factorial Experiments
+
+The repository includes several shell scripts to automate running comprehensive factorial parameter sweeps across the dataset:
+- `run_full_factorial_all.sh`: Runs the exact solvers (`MIPQ`, `MIP`, `CP`) with various combinations of pair-distance cuts, cardinality constraints, and compatibility preprocessing on the 5 largest ITC 2019 instances.
+- `run_full_factorial_lancs.sh`: Runs the same exact solver sweep over the 5 individual weekdays extracted from the Lancaster `lancs_yr23` instance.
+- `run_relaxations_factorial.sh`: Evaluates only the `ROOT` node linear relaxation bound across all 6 instances (5 ITC 2019 + 1 Lancaster) to rapidly benchmark the gap-closing impact of the different cut and preprocessing combinations.
+
 ## Command-Line Arguments
 
 - `--source {synthetic,itc2019,lancs_yr23}`: Input source. Default: `synthetic`.
@@ -237,13 +244,14 @@ The Excel file contains a single `summary` sheet. Repeated runs append new rows 
 - compatibility-preprocessing statistics,
 - solver status,
 - objective value,
-- the two objective components:
+- objective components:
   - total student walking distance,
-  - matching penalty,
+  - assignment mapping penalty,
+  - soft same-room and same-attendees penalties,
 - lower bound,
 - best global lower bound across solved methods for that instance,
 - optimality gap and global optimality gap,
-- runtime information,
+- runtime information (including detailed wall-clock timings for model construction phrases),
 - selected linearized cut mode.
 
 ### JSON export
