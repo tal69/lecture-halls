@@ -132,13 +132,13 @@ def parse_args() -> argparse.Namespace:
         dest="cuts",
         type=int,
         choices=(0, 1, 2, 3),
-        default=1,
+        default=0,
         help=(
             "Pair-distance cut mode: 0 = base link constraints only, "
             "1 = strong cut only, 2 = strong + symmetric strong cuts, "
             "3 = one-sided extended strong distance cuts plus aggregated SameAttendees "
             "biclique cuts. The CP model uses mode 3 as an additional propagation layer. "
-            "Default: 1."
+            "Default: 0."
         ),
     )
     parser.add_argument(
@@ -1288,7 +1288,7 @@ def build_gurobi_linearized_model(
         model.Params.TimeLimit = time_limit
     model.Params.Threads = thread_limit
     if cuts == 0:  # Otherwise the problem frequently ends with NUMERIC error prematurely
-        model.Params.NumericFocus = 2
+        # model.Params.NumericFocus = 2  # maybe this is too strict
         model.Params.ScaleFlag = 2
         model.Params.ObjScale = -0.5
 
