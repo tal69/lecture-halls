@@ -117,7 +117,7 @@ def parse_args() -> argparse.Namespace:
         "--no-capacity-fix",
         dest="itc_capacity_fix",
         action="store_false",
-        help="Disable the default ITC capacity fix that reduces oversized lectures to their assigned room capacity.",
+        help="Disable the default ITC capacity fix that reduces oversized lectures to their assigned hall capacity.",
     )
     parser.add_argument(
         "--time-limit",
@@ -642,7 +642,7 @@ def count_decomposition_connected_components(instance: Instance) -> int:
         adjacency[lecture_id_1].add(lecture_id_2)
         adjacency[lecture_id_2].add(lecture_id_1)
 
-    # Overlap edges induce room-competition coupling.
+    # Overlap edges induce hall-competition coupling.
     for _, clique_lecture_ids in build_maximal_active_cliques(instance):
         for index, lecture_id_1 in enumerate(clique_lecture_ids):
             for lecture_id_2 in clique_lecture_ids[index + 1 :]:
@@ -2638,7 +2638,7 @@ def print_instance_console_view(instance: Instance, json_path: Path) -> None:
             f"soft SameAttendees={len(instance.soft_same_attendees_pairs)}"
         )
     if instance.assignment_penalty_type == "itc2019_room_penalty":
-        print("Penalty: assignment penalties are the ITC 2019 class-room penalties from the instance XML.")
+        print("Penalty: assignment penalties are the ITC 2019 lecture-hall penalties from the instance XML.")
     else:
         print(
             "Penalty: "

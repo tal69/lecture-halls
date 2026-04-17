@@ -2,7 +2,7 @@
 
 This repository contains a simulation and optimization tool for the lecture hall quadratic assignment problem. The script generates or loads a **single-day** lecture-to-hall assignment instance and solves it with alternative exact formulations while minimizing:
 - the walking burden induced by consecutive lectures that share students, and
-- a linear assignment penalty for excessive wasted space in the chosen hall (or the native room-assignment penalties when using real-world data).
+- a linear assignment penalty for excessive wasted space in the chosen hall (or the native hall-assignment penalties when using real-world data).
 
 The current workflow includes:
 - a random single-day synthetic instance generator,
@@ -58,21 +58,21 @@ Students:
 - and only very rarely take lectures from other topics.
 
 Lecture sizes are not sampled directly. They are the realized attendance counts produced by the cohort-based day-schedule simulation.
-After the student-journey simulation, each lecture size is tightened toward the capacity of its hidden feasible hall so that the room-capacity constraints remain globally feasible but materially more restrictive.
+After the student-journey simulation, each lecture size is tightened toward the capacity of its hidden feasible hall so that the hall-capacity constraints remain globally feasible but materially more restrictive.
 
 ## ITC 2019 Real-World Instances
 
 The script now natively supports loading real-world XML instances from the International Timetabling Competition (ITC 2019).
 - **Day Extraction**: Extracts a specific day of a specific week to retain the single-day focus. It infers the most loaded teaching week automatically if not specified.
-- **Student Flow Inference**: Maps class-student records to construct consecutive pair distances based on a "short break" threshold (inferred from the student timetable or manually configured).
-- **Capacity Fix**: Automatically handles capacity adjustments when the ITC solution assigned a class to a room strictly smaller than the student count by reducing the student count strictly for those anomalies.
-- **Penalties**: Incorporates the exact room-assignment penalties provided in the original ITC 2019 XML models instead of the synthetic wasted-space penalty.
+- **Student Flow Inference**: Maps lecture-student records to construct consecutive pair distances based on a "short break" threshold (inferred from the student timetable or manually configured).
+- **Capacity Fix**: Automatically handles capacity adjustments when the ITC solution assigned a lecture to a hall strictly smaller than the student count by reducing the student count strictly for those anomalies.
+- **Penalties**: Incorporates the exact hall-assignment penalties provided in the original ITC 2019 XML models instead of the synthetic wasted-space penalty.
 
 The repository also supports a Lancaster-specific data-transformation path for `lancs-yr23.xml`.
-- It merges `SameClass` components into representative activities.
+- It merges `SameLecture` components into representative activities.
 - It selects the peak-load week of each of the two main teaching terms.
-- It greedily repairs student registrations subject to merged weekly timetable feasibility and hidden-room capacities.
-- It then exposes the resulting single-day room-assignment instances directly to `lecture_hall_experiment.py`.
+- It greedily repairs student registrations subject to merged weekly timetable feasibility and hidden-hall capacities.
+- It then exposes the resulting single-day hall-assignment instances directly to `lecture_hall_experiment.py`.
 
 ## Assignment Penalty
 
@@ -87,13 +87,13 @@ penalty(s, u) = max(0, ceil(0.9 * u) - s)^2
 ```
 
 Examples for a hall of capacity `100`:
-- class size `90` to `100`: penalty `0`
-- class size `89`: penalty `1`
-- class size `80`: penalty `100`
+- lecture size `90` to `100`: penalty `0`
+- lecture size `89`: penalty `1`
+- lecture size `80`: penalty `100`
 
 For synthetic instances, this penalty is generated automatically for every compatible lecture-hall pair and added to the objective in all solver backends (`MIPQ`, `MIP`, and `CP`).
 
-For ITC 2019 instances, the model instead uses the pre-existing assignment penalties defined in the dataset for each class-room pair.
+For ITC 2019 instances, the model instead uses the pre-existing assignment penalties defined in the dataset for each lecture-hall pair.
 
 Determinism note:
 - if the original greedy attribute-assignment path succeeds for a given seed, the generated instance is unchanged by the fallback patch;
@@ -174,7 +174,7 @@ The repository includes several shell scripts to automate running comprehensive 
   - Not used by `lancs_yr23` because that data-transformation path auto-selects one peak-load week per term.
 - `--itc-day`: Optional 0-based source day index for ITC 2019. Loads all if omitted.
 - `--itc-short-break-slots`: Optional successor gap threshold for ITC 2019. Inferred automatically if omitted.
-- `--no-capacity-fix`: Disable the default ITC capacity fix that reduces oversized lectures to their assigned room capacity.
+- `--no-capacity-fix`: Disable the default ITC capacity fix that reduces oversized lectures to their assigned hall capacity.
 - `--time-limit`: per-solver time limit in seconds. Default: `60`.
 - `--cuts {0,1,2,3}`: pair-distance cut mode.
   - `0`: base compact linking constraints only.
@@ -247,7 +247,7 @@ The Excel file contains a single `summary` sheet. Repeated runs append new rows 
 - objective components:
   - total student walking distance,
   - assignment mapping penalty,
-  - soft same-room and same-attendees penalties,
+  - soft same-hall and same-attendees penalties,
 - lower bound,
 - best global lower bound across solved methods for that instance,
 - optimality gap and global optimality gap,
