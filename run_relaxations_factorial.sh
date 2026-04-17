@@ -6,7 +6,7 @@ cd "$ROOT_DIR"
 
 # ---------------------------------------------------------------------------
 # Usage: ./run_relaxations_factorial.sh <time_limit_seconds>
-# Runs LP and ROOT models for all 6 instances:
+# Runs ROOT model for all 6 instances:
 # - 5 ITC2019 instances
 # - 1 Lancaster bridge instance (across all 5 weekdays)
 # ---------------------------------------------------------------------------
