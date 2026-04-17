@@ -8,7 +8,7 @@ cd "$ROOT_DIR"
 # Usage: ./run_relaxations_factorial.sh <time_limit_seconds>
 # Runs ROOT model for all 6 instances:
 # - 5 ITC2019 instances
-# - 1 Lancaster bridge instance (across all 5 weekdays)
+# - 1 Lancaster 2023 instance family (across all 5 weekdays)
 # ---------------------------------------------------------------------------
 if [[ $# -lt 1 ]]; then
   echo "Usage: $0 <time_limit_seconds>" >&2
@@ -39,7 +39,7 @@ run_case() {
   local source_type="$1"
   local instance="$2"
   local day_opt="$3"
-  local use_cut3="$4"
+  local use_biclique="$4"
   local use_cardinality="$5"
   local preprocess_mode="$6"
   local model_type="$7"
@@ -59,10 +59,10 @@ run_case() {
     cmd+=("--itc-day" "$day_opt")
   fi
 
-  local cut_label="default"
-  if [[ "$use_cut3" == "1" ]]; then
-    cmd+=("--cuts" "3")
-    cut_label="cuts3"
+  local biclique_label="no-biclique"
+  if [[ "$use_biclique" == "1" ]]; then
+    cmd+=("--biclique")
+    biclique_label="biclique"
   fi
 
   local cardinality_label="no-cardinality"
@@ -72,7 +72,7 @@ run_case() {
   fi
 
   echo "===================================================================="
-  echo "Instance: $instance | day=${day_opt:-auto} | Model: $model_type | $cut_label | $cardinality_label | preprocess=$preprocess_mode | time_limit=${TIME_LIMIT}s"
+  echo "Instance: $instance | day=${day_opt:-auto} | Model: $model_type | $biclique_label | $cardinality_label | preprocess=$preprocess_mode | time_limit=${TIME_LIMIT}s"
   echo "===================================================================="
   "${cmd[@]}"
 }
@@ -87,18 +87,18 @@ ITC_INSTANCES=(
 )
 
 for model_type in ROOT; do
-  for use_cut3 in 0 1; do
+  for use_biclique in 0 1; do
     for use_cardinality in 0 1; do
       for preprocess_mode in none light; do
 
         # 1-5: ITC2019 instances
         for instance in "${ITC_INSTANCES[@]}"; do
-          run_case "itc2019" "$instance" "" "$use_cut3" "$use_cardinality" "$preprocess_mode" "$model_type"
+          run_case "itc2019" "$instance" "" "$use_biclique" "$use_cardinality" "$preprocess_mode" "$model_type"
         done
 
         # 6: Lancaster instance (over 5 weekdays)
         for day_index in 0 1 2 3 4; do
-          run_case "lancs_yr23" "$LANCS_INSTANCE_PATH" "$day_index" "$use_cut3" "$use_cardinality" "$preprocess_mode" "$model_type"
+          run_case "lancs_yr23" "$LANCS_INSTANCE_PATH" "$day_index" "$use_biclique" "$use_cardinality" "$preprocess_mode" "$model_type"
         done
 
       done

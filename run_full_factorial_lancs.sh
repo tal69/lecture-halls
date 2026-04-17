@@ -6,10 +6,10 @@ cd "$ROOT_DIR"
 
 # ---------------------------------------------------------------------------
 # Usage: ./run_full_factorial_lancs.sh <time_limit_seconds>
-# Runs all weekdays (0..4) of the Lancaster bridge instances.
+# Runs all weekdays (0..4) of the Lancaster 2023 derived instances.
 # For each selected day, lecture_hall_experiment.py loads that day from:
-# - the first substantial week of term 1, and
-# - the first substantial week of term 2.
+# - the most loaded week of term 1, and
+# - the most loaded week of term 2.
 # ---------------------------------------------------------------------------
 if [[ $# -lt 1 ]]; then
   echo "Usage: $0 <time_limit_seconds>" >&2
@@ -26,8 +26,8 @@ PYTHON_BIN="${PYTHON_BIN:-python}"
 OUTPUT_FILE="lancs_yr23_full_factorial_${TIME_LIMIT}s.xlsx"
 INSTANCE_PATH="${INSTANCE_PATH:-ITC2019/lancs-yr23.xml}"
 
-# Weekdays only. The Lancaster bridge auto-selects the first substantial week
-# of each term; this loop selects the source day within those two weeks.
+# Weekdays only. The Lancaster data-preparation path auto-selects the most
+# loaded week of each term; this loop selects the source day within those weeks.
 DAYS=(0 1 2 3 4)
 
 if [[ -f "$OUTPUT_FILE" ]]; then
@@ -42,7 +42,7 @@ fi
 
 run_case() {
   local day_index="$1"
-  local use_cut3="$2"
+  local use_biclique="$2"
   local use_cardinality="$3"
   local preprocess_mode="$4"
 
@@ -57,10 +57,10 @@ run_case() {
     "--time-limit" "$TIME_LIMIT"
   )
 
-  local cut_label="default"
-  if [[ "$use_cut3" == "1" ]]; then
-    cmd+=("--cuts" "3")
-    cut_label="cuts3"
+  local biclique_label="no-biclique"
+  if [[ "$use_biclique" == "1" ]]; then
+    cmd+=("--biclique")
+    biclique_label="biclique"
   fi
 
   local cardinality_label="no-cardinality"
@@ -70,17 +70,17 @@ run_case() {
   fi
 
   echo "===================================================================="
-  echo "Lancaster day=$day_index | $cut_label | $cardinality_label | preprocess=$preprocess_mode | time_limit=${TIME_LIMIT}s"
+  echo "Lancaster day=$day_index | $biclique_label | $cardinality_label | preprocess=$preprocess_mode | time_limit=${TIME_LIMIT}s"
   echo "Source: $INSTANCE_PATH"
   echo "===================================================================="
   "${cmd[@]}"
 }
 
 for day_index in "${DAYS[@]}"; do
-  for use_cut3 in 0 1; do
+  for use_biclique in 0 1; do
     for use_cardinality in 0 1; do
       for preprocess_mode in none light; do
-        run_case "$day_index" "$use_cut3" "$use_cardinality" "$preprocess_mode"
+        run_case "$day_index" "$use_biclique" "$use_cardinality" "$preprocess_mode"
       done
     done
   done

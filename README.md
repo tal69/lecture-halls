@@ -1,21 +1,32 @@
 # Quadratic Lecture Hall Assignment
 
-This repository contains a simulation and optimization tool for the lecture hall quadratic assignment problem. The script generates or loads a **single-day** lecture-to-hall assignment instance and solves it with alternative exact formulations while minimizing:
-- the walking burden induced by consecutive lectures that share students, and
-- a linear assignment penalty for excessive wasted space in the chosen hall (or the native hall-assignment penalties when using real-world data).
+This repository contains data acquisition, instance-preparation, and exact optimization code for the lecture hall quadratic assignment problem. The main workflow is to transform realistic weekly timetabling and registration data into **single-day** lecture-to-hall assignment instances and then solve them with alternative exact formulations.
+
+The realistic-data pipeline currently supports:
+- the ITC 2019 university course timetabling benchmark XML files,
+- the Lancaster 2023 institutional timetable and anonymized registration data,
+- preservation of the original hall set, capacities, and hall-to-hall distances,
+- reconstruction of student-flow successor pairs from timetable and registration records,
+- import or propagation of hall-assignment penalties,
+- and propagation of the additional side constraints discussed in Section 3.5, in particular hard and soft `SameRoom` and `SameAttendees`.
+
+The optimization models minimize:
+- the walking burden induced by consecutive lectures that share students,
+- linear hall-assignment penalties,
+- and, when present in the source data, penalties for soft `SameRoom` and soft `SameAttendees` violations.
 
 The current workflow includes:
-- a random single-day synthetic instance generator,
-- a student-journey simulation that determines lecture sizes and the realized successor set \(A'\),
-- an importer for the ITC 2019 course timetabling dataset that extracts single-day problems and infers student transition graphs,
-- an optional family of capacity-dominance cardinality constraints derived from maximal overlap cliques,
+- realistic-data preparation for ITC 2019, including peak-week selection, weekday extraction, short-break inference, student-flow construction, hall-penalty import, and side-constraint extraction,
+- realistic-data preparation for Lancaster 2023, including `SameClass` contraction, peak-week selection by term, registration repair, and side-constraint projection,
+- optional capacity-dominance constraints and compatibility preprocessing,
 - three main solver backends:
   - GUROBI bilinear `MIPQ`,
   - GUROBI linearized `MIP`,
   - OR-Tools `CP`,
-- and a `ROOT` mode for reporting the root-node bound of the linearized GUROBI model.
+- a `ROOT` mode for reporting the root-node bound of the linearized GUROBI model,
+- and a synthetic single-day instance generator for controlled experiments and stress tests.
 
-The script also supports an `--instance-only` path that skips solving, prints the generated optimization input in a readable terminal layout, and saves the same instance in JSON.
+The script also supports an `--instance-only` path that skips solving, prints the optimization input in a readable terminal layout, and saves the same instance in JSON.
 
 ## Requirements
 
@@ -33,13 +44,32 @@ pip install pandas openpyxl gurobipy ortools
 
 `gurobipy` requires a valid Gurobi license for the `MIPQ`, `MIP`, and `ROOT` runs.
 
+## Real-World Data Preparation
+
+### ITC 2019
+
+The script natively supports loading real-world XML instances from the International Timetabling Competition (ITC 2019).
+- **Week and Day Selection**: It selects the most loaded teaching week automatically if not specified, and by default retains only weekdays `0-4`.
+- **Student-Flow Inference**: It maps lecture-student records to construct consecutive successor pairs using a short-break threshold that can be inferred from the timetable or provided manually.
+- **Capacity Fix**: It automatically handles anomalies where the published ITC solution places a lecture in a hall smaller than the recorded class size by reducing the student count only for those anomalies.
+- **Penalties and Side Constraints**: It imports the original hall-assignment penalties together with the hard and soft `SameRoom` and `SameAttendees` constraints defined in the XML data.
+
+### Lancaster 2023
+
+The repository also supports a Lancaster-specific data-transformation path for `lancs-yr23.xml`.
+- It merges `SameClass` components into representative activities before any day-level instance is created.
+- It identifies the two main teaching terms and selects the peak-load week of each term.
+- It keeps weekdays `0-4` by default and discards weekend activity unless a specific source day is requested.
+- It greedily repairs student registrations subject to the merged weekly timetable and hidden-hall capacities.
+- It propagates the relevant side constraints from the weekly XML data to the resulting day-level hall-assignment instances exposed to `lecture_hall_experiment.py`.
+
 ## Synthetic Instance Generation
 
-The synthetic generator builds a **single-day** instance because the weekly problem is separable by day.
+The synthetic generator is retained for controlled experiments and stress testing. It also builds a **single-day** instance because the weekly problem is separable by day.
 
 Lectures:
 - have duration `2` to `4` slots,
-- are distributed across halls to match the requested density,
+- are initially distributed across halls to match the requested density in a way that respects hall capacities; this initial assignment is hidden from the solver,
 - are assigned balanced `subject` and `study_year` labels,
 - are classified as roughly `70%` compulsory and `30%` elective,
 - are first assigned by a randomized greedy balancing heuristic,
@@ -50,29 +80,14 @@ Lectures:
   - but not both.
 
 Students:
-- are generated around active `(subject, study_year)` cohorts rather than as independent first-course draws,
+- are generated around active `(subject, study_year)` cohorts,
 - receive cohort sizes that are anchored to the compulsory offerings of their own cohort,
 - attend almost all compulsory lectures of their own topic and year,
 - are frequently distributed among their own parallel elective lectures,
 - may occasionally take a previous-year lecture in their own topic,
 - and only very rarely take lectures from other topics.
 
-Lecture sizes are not sampled directly. They are the realized attendance counts produced by the cohort-based day-schedule simulation.
-After the student-journey simulation, each lecture size is tightened toward the capacity of its hidden feasible hall so that the hall-capacity constraints remain globally feasible but materially more restrictive.
-
-## ITC 2019 Real-World Instances
-
-The script now natively supports loading real-world XML instances from the International Timetabling Competition (ITC 2019).
-- **Day Extraction**: Extracts a specific day of a specific week to retain the single-day focus. It infers the most loaded teaching week automatically if not specified.
-- **Student Flow Inference**: Maps lecture-student records to construct consecutive pair distances based on a "short break" threshold (inferred from the student timetable or manually configured).
-- **Capacity Fix**: Automatically handles capacity adjustments when the ITC solution assigned a lecture to a hall strictly smaller than the student count by reducing the student count strictly for those anomalies.
-- **Penalties**: Incorporates the exact hall-assignment penalties provided in the original ITC 2019 XML models instead of the synthetic wasted-space penalty.
-
-The repository also supports a Lancaster-specific data-transformation path for `lancs-yr23.xml`.
-- It merges `SameClass` components into representative activities.
-- It selects the peak-load week of each of the two main teaching terms.
-- It greedily repairs student registrations subject to merged weekly timetable feasibility and hidden-hall capacities.
-- It then exposes the resulting single-day hall-assignment instances directly to `lecture_hall_experiment.py`.
+Lecture sizes are not sampled directly. They are the realized attendance counts produced by the cohort-based day-schedule simulation. After the student-journey simulation, each lecture size is tightened toward the capacity of its hidden feasible hall so that the hall-capacity constraints remain globally feasible but materially more restrictive.
 
 ## Assignment Penalty
 
@@ -91,9 +106,9 @@ Examples for a hall of capacity `100`:
 - lecture size `89`: penalty `1`
 - lecture size `80`: penalty `100`
 
-For synthetic instances, this penalty is generated automatically for every compatible class-room pair and added to the objective in all solver backends (`MIPQ`, `MIP`, and `CP`).
+For synthetic instances, this penalty is generated automatically for every compatible class-room pair.
 
-For ITC 2019 instances, the model instead uses the pre-existing assignment penalties defined in the dataset for each class-room pair.
+For ITC 2019 and Lancaster 2023 instances, the model instead uses the pre-existing assignment penalties defined in the dataset for each hall-lecture pair.
 
 Determinism note:
 - if the original greedy attribute-assignment path succeeds for a given seed, the generated instance is unchanged by the fallback patch;
@@ -101,24 +116,20 @@ Determinism note:
 
 ## Usage
 
-The main entry point is `lecture_hall_experiment.py`. It defaults to synthetic generation:
+The main entry point is `lecture_hall_experiment.py`. The paper workflow primarily uses the real-world data-preparation modes shown below. If `--source` is omitted, the script falls back to synthetic generation.
 
-```bash
-python lecture_hall_experiment.py --num-halls 10
-```
-
-Example using an ITC 2019 instance with preprocessing and cuts:
+Example using an ITC 2019 instance with preprocessing and biclique strengthening:
 
 ```bash
 python lecture_hall_experiment.py \
     --source itc2019 \
     --itc-instance pu-proj-fal19 \
     --compatibility-preprocess light \
-    --cuts 3 \
+    --biclique \
     --time-limit 120
 ```
 
-Example using the Lancaster bridge:
+Example using the Lancaster data-preparation path:
 
 ```bash
 python lecture_hall_experiment.py \
@@ -136,7 +147,7 @@ python lecture_hall_experiment.py \
     --density 0.9 \
     --time-limit 120 \
     --seed 1-10 \
-    --cuts 1 \
+    --biclique \
     --compatibility-preprocess full \
     --save-json
 ```
@@ -155,33 +166,35 @@ python lecture_hall_experiment.py \
 ### Factorial Experiments
 
 The repository includes several shell scripts to automate running comprehensive factorial parameter sweeps across the dataset:
-- `run_full_factorial_all.sh`: Runs the exact solvers (`MIPQ`, `MIP`, `CP`) with various combinations of pair-distance cuts, cardinality constraints, and compatibility preprocessing on the 5 largest ITC 2019 instances.
-- `run_full_factorial_lancs.sh`: Runs the same exact solver sweep over the 5 individual weekdays extracted from the Lancaster `lancs_yr23` instance.
-- `run_relaxations_factorial.sh`: Evaluates only the `ROOT` node linear relaxation bound across all 6 instances (5 ITC 2019 + 1 Lancaster) to rapidly benchmark the gap-closing impact of the different cut and preprocessing combinations.
+- `run_full_factorial_all.sh`: Runs the exact solvers (`MIPQ`, `MIP`, `CP`) with all eight combinations of biclique strengthening, cardinality (capacity-dominance) constraints, and compatibility preprocessing on the 5 largest ITC 2019 instances (5 daily instances of the quadratic hall assignment problem for each, so 25 instances in total).
+- `run_full_factorial_lancs.sh`: Runs the same exact solver sweep over the 10 individual weekdays extracted from the Lancaster `lancs_yr23` instance (10 daily instances - 5 from the weekdays of the most loaded week in the first and second terms).
+- `run_relaxations_factorial.sh`: Evaluates only the `ROOT` node linear relaxation bound across all 6 instances (5 ITC 2019 + Lancaster) to benchmark the gap-closing impact of the different biclique and preprocessing combinations.
+
+Each script accepts the running time per instance as a parameter.
+
 
 ## Command-Line Arguments
 
 - `--source {synthetic,itc2019,lancs_yr23}`: Input source. Default: `synthetic`.
-- `--num-halls` **(required for synthetic)**: number of halls.
-- `--slots-per-day`: number of discrete slots in the day. Default: `12`.
-- `--seed`: one seed, a closed range such as `1-100`, or a start-step-end pattern such as `1-3-10`. Default: `0`.
-- `--density`: target lecture-slot utilization (synthetic only), interpreted as total lecture slots divided by total available hall-slots in the day. Default: `0.9`.
+- `--num-halls` **(required and relevant for synthetic)**: number of halls.
+- `--slots-per-day`: number of discrete slots in the day. Default: `12`. Relevant for the synthetic instances only.
+- `--seed`: one seed, a closed range such as `1-100`, or a start-step-end pattern such as `1-3-10`. Default: `0`. Relevant for the synthetic instances only.
+- `--density`: target lecture-slot utilization (synthetic only), interpreted as total lecture slots divided by total available hall-slots in the day. Default: `0.9`. Relevant for the synthetic instances only.
   - The synthetic generator also enforces the cohort-overlap rules used to create student flows. With the current `8 x 4 = 32` subject-year cohorts, at most `64` lectures can run simultaneously, so very high densities become infeasible once `num_halls > 64`.
 - `--itc-instance`: ITC 2019 instance stem, filename, or XML path (required for ITC).
   - Optional for `lancs_yr23`; when omitted it defaults to `ITC2019/lancs-yr23.xml`.
 - `--itc-solution`: Optional ITC 2019 solution XML path.
 - `--itc-week-index`: Optional 0-based week index for ITC 2019.
-  - Not used by `lancs_yr23` because that data-transformation path auto-selects one peak-load week per term.
-- `--itc-day`: Optional 0-based source day index for ITC 2019. Loads all if omitted.
-- `--itc-short-break-slots`: Optional successor gap threshold for ITC 2019. Inferred automatically if omitted.
+  - if omitted, the data-transformation path auto-selects one peak-load week per term.
+- `--itc-day`: Optional 0-based source day index for ITC 2019 or `lancs_yr23`.
+  - if omitted, the importers keep only weekdays `0-4`.
+- `--itc-short-break-slots`: Optional successor gap threshold for ITC 2019 and `lancs_yr23`. Inferred automatically if omitted.
 - `--no-capacity-fix`: Disable the default ITC capacity fix that reduces oversized lectures to their assigned hall capacity.
 - `--time-limit`: per-solver time limit in seconds. Default: `60`.
-- `--cuts {0,1,2,3}`: pair-distance cut mode.
-  - `0`: base compact linking constraints only.
-  - `1`: strong compact linking constraints only.
-  - `2`: strong compact linking constraints plus the symmetric strong family.
-  - `3`: one-sided extended strong cuts that enlarge the original strong family on the `l1` side.
-  - In the `CP` model, mode `3` also activates a redundant propagation layer analogous to the extended strong cut; modes `0`-`2` do not change the CP formulation.
+- `--biclique`: enable the anchor-based biclique strengthening described in the paper.
+  - In `MIP`, this replaces the base pair-distance links by the extended biclique family built from the anchor pair `(h_1,h_2)` and also aggregates `SameAttendees` constraints over the same threshold sets.
+  - In `MIPQ`, this adds the direct quadratic analogue of those biclique cuts to the bilinear walking term, and adds the analogous strengthening for soft `SameAttendees` penalties while keeping the soft penalties in the objective.
+  - In `CP`, this enables the corresponding redundant propagation layer on the pair-distance variables together with the aggregated `SameAttendees` propagation.
 - `--cardinality`: enable the capacity-dominance cardinality constraints derived from maximal overlap cliques and hall-capacity thresholds.
   - Disabled by default.
   - Applies to `MIPQ`, `MIP`, `CP`, and `ROOT`.
@@ -196,7 +209,7 @@ The repository includes several shell scripts to automate running comprehensive 
   - `full`: for each lecture `l'`, solve the hard-feasibility assignment model on all lectures while maximizing the capacity assigned to `l'`, then remove from `H(l')` every hall whose capacity is larger than the resulting maximum.
   - `light`: same idea, but solve the subproblem only on `l'` and lectures that overlap `l'`.
   - The `light` mode is safe but weaker: it may leave extra halls in `H(l')`, yet it cannot remove a hall that is needed by a globally feasible solution.
-  - The reduction is now applied iteratively until a fixed point is reached, so later subproblems benefit from earlier compatibility shrinkage.
+  - The reduction is applied iteratively until a fixed point is reached, so later subproblems benefit from earlier compatibility shrinkage.
 - `--instance-only`: generate the instance only, print the input in a user-friendly terminal format, and write JSON export(s). No solver is run and no Excel workbook is written.
 - `--output`: Excel output path. Default: `results.xlsx`.
 - `-s`, `--save-json`: also write a JSON file with the full instance and all solutions.
@@ -210,8 +223,9 @@ The current `MIP` model uses the **compact** linearization from the paper:
 - one nonnegative continuous pair variable per successor pair.
 
 Implementation note:
-- `--cuts 0` uses the rescaled distance variable form from the paper.
-- `--cuts 1`, `--cuts 2`, and `--cuts 3` use the equivalent weighted pair-cost substitution for computational reasons.
+- Without `--biclique`, `MIP` uses the base compact pair-distance links from the paper with the original weighted objective.
+- With `--biclique`, `MIP` uses the same anchor-based biclique construction as Section 3.4, and the implementation folds the common-student weight into the pair variable for scaling.
+- With `--biclique`, `MIPQ` keeps the walking objective bilinear and adds the corresponding quadratic biclique inequalities directly in the assignment variables.
 
 It does **not** use the older four-index linearization with variables `y_(l1,l2,h1,h2)`.
 

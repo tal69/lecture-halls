@@ -44,7 +44,7 @@ fi
 
 run_case() {
   local instance="$1"
-  local use_cut3="$2"
+  local use_biclique="$2"
   local use_cardinality="$3"
   local preprocess_mode="$4"
 
@@ -58,10 +58,10 @@ run_case() {
     "--time-limit" "$TIME_LIMIT"
   )
 
-  local cut_label="default"
-  if [[ "$use_cut3" == "1" ]]; then
-    cmd+=("--cuts" "3")
-    cut_label="cuts3"
+  local biclique_label="no-biclique"
+  if [[ "$use_biclique" == "1" ]]; then
+    cmd+=("--biclique")
+    biclique_label="biclique"
   fi
 
   local cardinality_label="no-cardinality"
@@ -71,16 +71,16 @@ run_case() {
   fi
 
   echo "===================================================================="
-  echo "Instance: $instance | $cut_label | $cardinality_label | preprocess=$preprocess_mode | time_limit=${TIME_LIMIT}s"
+  echo "Instance: $instance | $biclique_label | $cardinality_label | preprocess=$preprocess_mode | time_limit=${TIME_LIMIT}s"
   echo "===================================================================="
   "${cmd[@]}"
 }
 
 for instance in "${INSTANCES[@]}"; do
-  for use_cut3 in 0 1; do
+  for use_biclique in 0 1; do
     for use_cardinality in 0 1; do
       for preprocess_mode in none light; do
-        run_case "$instance" "$use_cut3" "$use_cardinality" "$preprocess_mode"
+        run_case "$instance" "$use_biclique" "$use_cardinality" "$preprocess_mode"
       done
     done
   done

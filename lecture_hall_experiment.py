@@ -128,17 +128,16 @@ def parse_args() -> argparse.Namespace:
         help="Per-solver time limit in seconds. Default: 60.",
     )
     parser.add_argument(
-        "--cuts",
-        dest="cuts",
-        type=int,
-        choices=(0, 1, 2, 3),
-        default=0,
+        "--biclique",
+        dest="biclique",
+        action="store_true",
         help=(
-            "Pair-distance cut mode: 0 = base link constraints only, "
-            "1 = strong cut only, 2 = strong + symmetric strong cuts, "
-            "3 = one-sided extended strong distance cuts plus aggregated SameAttendees "
-            "biclique cuts. The CP model uses mode 3 as an additional propagation layer. "
-            "Default: 0."
+            "Enable the anchor-based biclique strengthening described in the paper. "
+            "For MIP, this replaces the base pair-distance links by the extended biclique "
+            "family and aggregates SameAttendees constraints. For MIPQ, it adds the direct "
+            "quadratic analogue for the walking term and soft SameAttendees penalties, and "
+            "also aggregates SameAttendees constraints. In CP, it enables the analogous "
+            "distance propagation layer. Disabled by default."
         ),
     )
     parser.add_argument(
@@ -418,36 +417,16 @@ def add_cp_extended_strong_distance_propagation(
         return indicator
 
     for (lecture_id_1, lecture_id_2), z_var in z_vars.items():
-        halls_1 = instance.compatibility[lecture_id_1]
-        halls_2 = instance.compatibility[lecture_id_2]
-        seen_patterns: set[tuple[tuple[int, ...], tuple[int, ...], int]] = set()
-
-        for hall_id_1 in halls_1:
-            for hall_id_2 in halls_2:
-                threshold_distance = instance.distances[hall_id_1][hall_id_2]
-                far_halls_2 = tuple(
-                    hall_id
-                    for hall_id in halls_2
-                    if instance.distances[hall_id_1][hall_id] >= threshold_distance
-                )
-                far_halls_1 = tuple(
-                    hall_id
-                    for hall_id in halls_1
-                    if all(
-                        instance.distances[hall_id][far_hall_2] >= threshold_distance
-                        for far_hall_2 in far_halls_2
-                    )
-                )
-                pattern = (far_halls_1, far_halls_2, threshold_distance)
-                if pattern in seen_patterns:
-                    continue
-                seen_patterns.add(pattern)
-
-                left_indicator = subset_indicator(lecture_id_1, far_halls_1)
-                right_indicator = subset_indicator(lecture_id_2, far_halls_2)
-                model.Add(z_var >= threshold_distance).OnlyEnforceIf(
-                    [left_indicator, right_indicator]
-                )
+        for hall_subset_1, hall_subset_2, threshold_distance in distance_extended_biclique_patterns(
+            instance,
+            lecture_id_1,
+            lecture_id_2,
+        ):
+            left_indicator = subset_indicator(lecture_id_1, hall_subset_1)
+            right_indicator = subset_indicator(lecture_id_2, hall_subset_2)
+            model.Add(z_var >= threshold_distance).OnlyEnforceIf(
+                [left_indicator, right_indicator]
+            )
 
 
 def cp_sat_capacity_upper_bound(
@@ -811,6 +790,36 @@ def same_attendees_extended_biclique_patterns(
     return sorted(patterns)
 
 
+def distance_extended_biclique_patterns(
+    instance: Instance,
+    lecture_id_1: int,
+    lecture_id_2: int,
+) -> list[tuple[tuple[int, ...], tuple[int, ...], int]]:
+    halls_1 = tuple(instance.compatibility[lecture_id_1])
+    halls_2 = tuple(instance.compatibility[lecture_id_2])
+    patterns: set[tuple[tuple[int, ...], tuple[int, ...], int]] = set()
+
+    for anchor_hall_1 in halls_1:
+        for anchor_hall_2 in halls_2:
+            threshold_distance = instance.distances[anchor_hall_1][anchor_hall_2]
+            hall_subset_2 = tuple(
+                hall_id
+                for hall_id in halls_2
+                if instance.distances[anchor_hall_1][hall_id] >= threshold_distance
+            )
+            hall_subset_1 = tuple(
+                hall_id
+                for hall_id in halls_1
+                if all(
+                    instance.distances[hall_id][hall_id_2] >= threshold_distance
+                    for hall_id_2 in hall_subset_2
+                )
+            )
+            patterns.add((hall_subset_1, hall_subset_2, threshold_distance))
+
+    return sorted(patterns)
+
+
 def assignment_details_from_map(
     instance: Instance,
     assignment_by_lecture: dict[int, int] | None,
@@ -1041,7 +1050,7 @@ def add_gurobi_same_attendees_constraints(
     model: Model,
     instance: Instance,
     x: dict[tuple[int, int], Any],
-    use_strong_aggregation: bool = False,
+    use_biclique: bool = False,
     linearize_soft: bool = True,
 ) -> list[Any]:
     soft_penalty_terms: list[Any] = []
@@ -1057,7 +1066,7 @@ def add_gurobi_same_attendees_constraints(
                 x[(pair.lecture_id_1, hall_id_1)] + x[(pair.lecture_id_2, hall_id_2)] <= 1,
                 name=f"hard_same_attendees_{pair.lecture_id_1}_{pair.lecture_id_2}_{hall_id_1}_{hall_id_2}",
             )
-        if use_strong_aggregation:
+        if use_biclique:
             for hall_subset_1, hall_subset_2 in same_attendees_extended_biclique_patterns(
                 instance,
                 pair.lecture_id_1,
@@ -1096,7 +1105,7 @@ def add_gurobi_same_attendees_constraints(
                     f"_{hall_id_1}_{hall_id_2}"
                 ),
             )
-        if use_strong_aggregation:
+        if use_biclique:
             for hall_subset_1, hall_subset_2 in same_attendees_extended_biclique_patterns(
                 instance,
                 soft_pair.lecture_id_1,
@@ -1115,6 +1124,71 @@ def add_gurobi_same_attendees_constraints(
         soft_penalty_terms.append(soft_pair.penalty * violation_var)
 
     return soft_penalty_terms
+
+
+def add_gurobi_quadratic_same_attendees_biclique_constraints(
+    model: Model,
+    instance: Instance,
+    x: dict[tuple[int, int], Any],
+) -> None:
+    for soft_pair in instance.soft_same_attendees_pairs:
+        lecture_id_1 = soft_pair.lecture_id_1
+        lecture_id_2 = soft_pair.lecture_id_2
+        for hall_subset_1, hall_subset_2 in same_attendees_extended_biclique_patterns(
+            instance,
+            lecture_id_1,
+            lecture_id_2,
+        ):
+            subset_violation_expr = quicksum(
+                x[(lecture_id_1, hall_id_1)] * x[(lecture_id_2, hall_id_2)]
+                for hall_id_1 in hall_subset_1
+                for hall_id_2 in hall_subset_2
+            )
+            model.addQConstr(
+                subset_violation_expr
+                >= quicksum(x[(lecture_id_1, hall_id)] for hall_id in hall_subset_1)
+                + quicksum(x[(lecture_id_2, hall_id)] for hall_id in hall_subset_2)
+                - 1,
+                name=(
+                    f"soft_same_attendees_qbiclique_{lecture_id_1}_{lecture_id_2}"
+                    f"_{len(hall_subset_1)}_{len(hall_subset_2)}"
+                ),
+            )
+
+
+def add_gurobi_quadratic_distance_biclique_constraints(
+    model: Model,
+    instance: Instance,
+    x: dict[tuple[int, int], Any],
+) -> None:
+    for (lecture_id_1, lecture_id_2), common_count in instance.common_students.items():
+        for hall_subset_1, hall_subset_2, threshold_distance in distance_extended_biclique_patterns(
+            instance,
+            lecture_id_1,
+            lecture_id_2,
+        ):
+            subset_distance_expr = quicksum(
+                common_count
+                * instance.distances[hall_id_1][hall_id_2]
+                * x[(lecture_id_1, hall_id_1)]
+                * x[(lecture_id_2, hall_id_2)]
+                for hall_id_1 in hall_subset_1
+                for hall_id_2 in hall_subset_2
+            )
+            model.addQConstr(
+                subset_distance_expr
+                >= common_count
+                * threshold_distance
+                * (
+                    quicksum(x[(lecture_id_1, hall_id)] for hall_id in hall_subset_1)
+                    + quicksum(x[(lecture_id_2, hall_id)] for hall_id in hall_subset_2)
+                    - 1
+                ),
+                name=(
+                    f"distance_qbiclique_{lecture_id_1}_{lecture_id_2}"
+                    f"_{threshold_distance}_{len(hall_subset_1)}_{len(hall_subset_2)}"
+                ),
+            )
 
 
 def quadratic_same_room_penalty_terms(
@@ -1194,7 +1268,7 @@ def add_cp_same_attendees_constraints(
     model: cp_model.CpModel,
     instance: Instance,
     hall_assignment: dict[int, cp_model.IntVar],
-    use_strong_aggregation: bool = False,
+    use_biclique: bool = False,
 ) -> list[Any]:
     penalty_terms: list[Any] = []
     lecture_map = {lecture.lecture_id: lecture for lecture in instance.lectures}
@@ -1224,7 +1298,7 @@ def add_cp_same_attendees_constraints(
             [hall_assignment[pair.lecture_id_1], hall_assignment[pair.lecture_id_2]],
             forbidden_pairs,
         )
-        if use_strong_aggregation:
+        if use_biclique:
             for hall_subset_1, hall_subset_2 in same_attendees_extended_biclique_patterns(
                 instance,
                 pair.lecture_id_1,
@@ -1257,7 +1331,7 @@ def add_cp_same_attendees_constraints(
                 for hall_id_2 in instance.compatibility[soft_pair.lecture_id_2]
             ],
         )
-        if use_strong_aggregation:
+        if use_biclique:
             for hall_subset_1, hall_subset_2 in same_attendees_extended_biclique_patterns(
                 instance,
                 soft_pair.lecture_id_1,
@@ -1273,7 +1347,7 @@ def add_cp_same_attendees_constraints(
 
 def build_gurobi_linearized_model(
     instance: Instance,
-    cuts: int,
+    biclique: bool,
     time_limit: float | None,
     verbose: bool,
     cardinality: bool = False,
@@ -1287,15 +1361,16 @@ def build_gurobi_linearized_model(
     if time_limit is not None:
         model.Params.TimeLimit = time_limit
     model.Params.Threads = thread_limit
-    if cuts == 0:  # Otherwise the problem frequently ends with NUMERIC error prematurely
+    if not biclique:  # Otherwise the problem frequently ends with NUMERIC error prematurely
         # model.Params.NumericFocus = 2  # maybe this is too strict
         model.Params.ScaleFlag = 2
         model.Params.ObjScale = -0.5
 
     x: dict[tuple[int, int], Any] = {}
-    # The paper denotes this pair auxiliary uniformly by z_{l1,l2}. For cuts > 0
-    # the implementation keeps the same z-based name even though the common-student
-    # weight is folded into the strengthened linear inequalities for scaling.
+    # The paper denotes this pair auxiliary uniformly by z_{l1,l2}. When biclique
+    # strengthening is enabled, the implementation keeps the same z-based name even
+    # though the common-student weight is folded into the strengthened inequalities
+    # for scaling.
     z_vars: dict[tuple[int, int], Any] = {}
 
     block_start = time.perf_counter()
@@ -1375,14 +1450,14 @@ def build_gurobi_linearized_model(
         model,
         instance,
         x,
-        use_strong_aggregation=(cuts == 3),
+        use_biclique=biclique,
     )
     construction_timings["same_attendees_constraints_wall_seconds"] = (
         time.perf_counter() - block_start
     )
 
     block_start = time.perf_counter()
-    if cuts == 0:
+    if not biclique:
         for lecture_id_1, lecture_id_2 in instance.common_students:
             for hall_id_1 in instance.compatibility[lecture_id_1]:
                 for hall_id_2 in instance.compatibility[lecture_id_2]:
@@ -1392,93 +1467,31 @@ def build_gurobi_linearized_model(
                         * (x[(lecture_id_1, hall_id_1)] + x[(lecture_id_2, hall_id_2)] - 1),
                         name=f"link_{lecture_id_1}_{lecture_id_2}_{hall_id_1}_{hall_id_2}",
                     )
-
-    if cuts in (1, 2):
+    else:
         for (lecture_id_1, lecture_id_2), common_count in instance.common_students.items():
-            halls_1 = instance.compatibility[lecture_id_1]
-            halls_2 = instance.compatibility[lecture_id_2]
-
-            for hall_id_1 in halls_1:
-                for hall_id_2 in halls_2:
-                    threshold_distance = instance.distances[hall_id_1][hall_id_2]
-                    farther_halls = [
-                        hall_id
-                        for hall_id in halls_2
-                        if instance.distances[hall_id_1][hall_id] >= threshold_distance
-                    ]
-                    model.addConstr(
-                        z_vars[(lecture_id_1, lecture_id_2)]
-                        >= common_count
-                        * threshold_distance
-                        * (
-                            x[(lecture_id_1, hall_id_1)]
-                            - 1
-                            + quicksum(x[(lecture_id_2, hall_id)] for hall_id in farther_halls)
-                        ),
-                        name=f"strong_{lecture_id_1}_{lecture_id_2}_{hall_id_1}_{hall_id_2}",
-                    )
-
-    if cuts == 2:
-        for (lecture_id_1, lecture_id_2), common_count in instance.common_students.items():
-            halls_1 = instance.compatibility[lecture_id_1]
-            halls_2 = instance.compatibility[lecture_id_2]
-
-            for hall_id_1 in halls_1:
-                for hall_id_2 in halls_2:
-                    threshold_distance = instance.distances[hall_id_1][hall_id_2]
-                    farther_halls = [
-                        hall_id
-                        for hall_id in halls_1
-                        if instance.distances[hall_id][hall_id_2] >= threshold_distance
-                    ]
-                    model.addConstr(
-                        z_vars[(lecture_id_1, lecture_id_2)]
-                        >= common_count
-                        * threshold_distance
-                        * (
-                            quicksum(x[(lecture_id_1, hall_id)] for hall_id in farther_halls)
-                            - 1
-                            + x[(lecture_id_2, hall_id_2)]
-                        ),
-                        name=f"strongsym_{lecture_id_1}_{lecture_id_2}_{hall_id_1}_{hall_id_2}",
-                    )
-
-    if cuts == 3:
-        for (lecture_id_1, lecture_id_2), common_count in instance.common_students.items():
-            halls_1 = instance.compatibility[lecture_id_1]
-            halls_2 = instance.compatibility[lecture_id_2]
-
-            for hall_id_1 in halls_1:
-                for hall_id_2 in halls_2:
-                    threshold_distance = instance.distances[hall_id_1][hall_id_2]
-                    far_halls_2 = [
-                        hall_id
-                        for hall_id in halls_2
-                        if instance.distances[hall_id_1][hall_id] >= threshold_distance
-                    ]
-                    far_halls_1 = [
-                        hall_id
-                        for hall_id in halls_1
-                        if all(
-                            instance.distances[hall_id][far_hall_2] >= threshold_distance
-                            for far_hall_2 in far_halls_2
-                        )
-                    ]
-                    model.addConstr(
-                        z_vars[(lecture_id_1, lecture_id_2)]
-                        >= common_count
-                        * threshold_distance
-                        * (
-                            quicksum(x[(lecture_id_1, hall_id)] for hall_id in far_halls_1)
-                            - 1
-                            + quicksum(x[(lecture_id_2, hall_id)] for hall_id in far_halls_2)
-                        ),
-                        name=f"strongext_{lecture_id_1}_{lecture_id_2}_{hall_id_1}_{hall_id_2}",
-                    )
+            for hall_subset_1, hall_subset_2, threshold_distance in distance_extended_biclique_patterns(
+                instance,
+                lecture_id_1,
+                lecture_id_2,
+            ):
+                model.addConstr(
+                    z_vars[(lecture_id_1, lecture_id_2)]
+                    >= common_count
+                    * threshold_distance
+                    * (
+                        quicksum(x[(lecture_id_1, hall_id)] for hall_id in hall_subset_1)
+                        - 1
+                        + quicksum(x[(lecture_id_2, hall_id)] for hall_id in hall_subset_2)
+                    ),
+                    name=(
+                        f"distance_biclique_{lecture_id_1}_{lecture_id_2}"
+                        f"_{threshold_distance}_{len(hall_subset_1)}_{len(hall_subset_2)}"
+                    ),
+                )
     construction_timings["distance_cut_generation_wall_seconds"] = time.perf_counter() - block_start
 
     block_start = time.perf_counter()
-    if cuts == 0:
+    if not biclique:
         # Keep the pair weights in the objective to improve matrix scaling.
         objective_terms = [
             common_count * z_vars[(lecture_id_1, lecture_id_2)]
@@ -1505,7 +1518,7 @@ def build_gurobi_linearized_model(
 def solve_gurobi_quadratic(
     instance: Instance,
     time_limit: float,
-    cuts: int = 1,
+    biclique: bool = False,
     verbose: bool = True,
     cardinality: bool = False,
 ) -> dict[str, Any]:
@@ -1598,10 +1611,19 @@ def solve_gurobi_quadratic(
             model,
             instance,
             x,
-            use_strong_aggregation=(cuts == 3),
+            use_biclique=biclique,
             linearize_soft=False,
         )
+        if biclique:
+            add_gurobi_quadratic_same_attendees_biclique_constraints(model, instance, x)
         construction_timings["same_attendees_constraints_wall_seconds"] = (
+            time.perf_counter() - block_start
+        )
+
+        block_start = time.perf_counter()
+        if biclique:
+            add_gurobi_quadratic_distance_biclique_constraints(model, instance, x)
+        construction_timings["distance_cut_generation_wall_seconds"] = (
             time.perf_counter() - block_start
         )
 
@@ -1653,7 +1675,7 @@ def solve_gurobi_quadratic(
             "solver_runtime_seconds": safe_float(model.Runtime),
             "mip_gap": safe_float(model.MIPGap) if model.SolCount > 0 else None,
             "threads": thread_limit,
-            "cuts_mode": cuts,
+            "biclique_enabled": biclique,
             "error": None,
             "solution": assignment_details_from_map(instance, assignment_by_lecture),
             **construction_timings,
@@ -1669,7 +1691,7 @@ def solve_gurobi_quadratic(
             "solver_runtime_seconds": None,
             "mip_gap": None,
             "threads": thread_limit,
-            "cuts_mode": cuts,
+            "biclique_enabled": biclique,
             "error": str(error),
             "solution": None,
             **construction_timings,
@@ -1679,7 +1701,7 @@ def solve_gurobi_quadratic(
 def solve_gurobi_linearized(
     instance: Instance,
     time_limit: float,
-    cuts: int = 1,
+    biclique: bool = False,
     verbose: bool = True,
     cardinality: bool = False,
 ) -> dict[str, Any]:
@@ -1689,7 +1711,7 @@ def solve_gurobi_linearized(
     try:
         model, x, _, thread_limit, construction_timings = build_gurobi_linearized_model(
             instance=instance,
-            cuts=cuts,
+            biclique=biclique,
             time_limit=time_limit,
             verbose=verbose,
             cardinality=cardinality,
@@ -1720,7 +1742,7 @@ def solve_gurobi_linearized(
             "solver_runtime_seconds": safe_float(model.Runtime),
             "mip_gap": safe_float(model.MIPGap) if model.SolCount > 0 else None,
             "threads": thread_limit,
-            "cuts_mode": cuts,
+            "biclique_enabled": biclique,
             "error": None,
             "solution": assignment_details_from_map(instance, assignment_by_lecture),
             **construction_timings,
@@ -1736,7 +1758,7 @@ def solve_gurobi_linearized(
             "solver_runtime_seconds": None,
             "mip_gap": None,
             "threads": thread_limit,
-            "cuts_mode": cuts,
+            "biclique_enabled": biclique,
             "error": str(error),
             "solution": None,
             **construction_timings,
@@ -1747,7 +1769,7 @@ def solve_gurobi_linearized(
 def solve_gurobi_linearized_root(
     instance: Instance,
     time_limit: float,
-    cuts: int = 1,
+    biclique: bool = False,
     verbose: bool = True,
     cardinality: bool = False,
 ) -> dict[str, Any]:
@@ -1756,7 +1778,7 @@ def solve_gurobi_linearized_root(
     try:
         model, _, _, thread_limit, construction_timings = build_gurobi_linearized_model(
             instance=instance,
-            cuts=cuts,
+            biclique=biclique,
             time_limit=time_limit,
             verbose=verbose,
             cardinality=cardinality,
@@ -1799,7 +1821,7 @@ def solve_gurobi_linearized_root(
             "solver_runtime_seconds": safe_float(model.Runtime),
             "mip_gap": None,
             "threads": thread_limit,
-            "cuts_mode": cuts,
+            "biclique_enabled": biclique,
             "error": None,
             "solution": None,
             **construction_timings,
@@ -1815,7 +1837,7 @@ def solve_gurobi_linearized_root(
             "solver_runtime_seconds": None,
             "mip_gap": None,
             "threads": gurobi_thread_limit(),
-            "cuts_mode": cuts,
+            "biclique_enabled": biclique,
             "error": str(error),
             "solution": None,
             **construction_timings,
@@ -1826,7 +1848,7 @@ def solve_cp_sat(
     instance: Instance,
     time_limit: float,
     verbose: bool = True,
-    cuts: int = 1,
+    biclique: bool = False,
     cardinality: bool = False,
 ) -> dict[str, Any]:
     wall_start = time.perf_counter()
@@ -1907,7 +1929,7 @@ def solve_cp_sat(
             model,
             instance,
             hall_assignment,
-            use_strong_aggregation=(cuts == 3),
+            use_biclique=biclique,
         )
     )
     construction_timings["same_attendees_constraints_wall_seconds"] = (
@@ -1956,7 +1978,7 @@ def solve_cp_sat(
         )
         objective_terms.append(common_count * z_var)
 
-    if cuts == 3 and z_vars:
+    if biclique and z_vars:
         cut_start = time.perf_counter()
         add_cp_extended_strong_distance_propagation(
             model=model,
@@ -2003,7 +2025,7 @@ def solve_cp_sat(
         "solver_runtime_seconds": safe_float(solver.WallTime()),
         "mip_gap": None,
         "threads": thread_limit,
-        "cuts_mode": cuts,
+        "biclique_enabled": biclique,
         "error": None,
         "solution": assignment_details_from_map(instance, assignment_by_lecture),
         **construction_timings,
@@ -2038,7 +2060,7 @@ def preprocessing_infeasible_results(selected_model: str | None, reason: str) ->
             "solver_runtime_seconds": None,
             "mip_gap": None,
             "threads": thread_limit,
-            "cuts_mode": None,
+            "biclique_enabled": None,
             "error": reason,
             "solution": None,
             **empty_model_construction_timings(),
@@ -2053,7 +2075,7 @@ def build_summary_rows(
     started_at: dt.datetime,
     finished_at: dt.datetime,
     time_limit: float,
-    cuts_mode: int,
+    biclique_enabled: bool,
     cardinality_enabled: bool,
 ) -> list[dict[str, Any]]:
     total_lecture_length = sum(lecture.duration for lecture in instance.lectures)
@@ -2153,7 +2175,7 @@ def build_summary_rows(
                 "peak_slot_density": peak_slot_density,
                 "free_waste_ratio": FREE_WASTE_RATIO,
                 "time_limit_seconds": time_limit,
-                "linearized_cuts": cuts_mode,
+                "biclique_enabled": biclique_enabled,
                 "cardinality_enabled": cardinality_enabled,
                 "num_lectures": len(instance.lectures),
                 "total_lecture_length": total_lecture_length,
@@ -2480,7 +2502,7 @@ def build_json_payload(
     started_at: dt.datetime,
     finished_at: dt.datetime,
     time_limit: float,
-    cuts_mode: int,
+    biclique_enabled: bool,
     cardinality_enabled: bool,
 ) -> dict[str, Any]:
     return {
@@ -2491,7 +2513,7 @@ def build_json_payload(
             "platform": platform.platform(),
             "python_version": sys.version,
             "time_limit_seconds": time_limit,
-            "linearized_cuts": cuts_mode,
+            "biclique_enabled": biclique_enabled,
             "cardinality_enabled": cardinality_enabled,
             "compatibility_preprocess_mode": instance.compatibility_preprocess_mode,
         },
@@ -2867,14 +2889,14 @@ def main() -> None:
                 solve_gurobi_quadratic(
                     instance,
                     args.time_limit,
-                    cuts=args.cuts,
+                    biclique=args.biclique,
                     verbose=not args.quiet,
                     cardinality=args.cardinality,
                 ),
                 solve_gurobi_linearized(
                     instance,
                     args.time_limit,
-                    cuts=args.cuts,
+                    biclique=args.biclique,
                     verbose=not args.quiet,
                     cardinality=args.cardinality,
                 ),
@@ -2882,7 +2904,7 @@ def main() -> None:
                     instance,
                     args.time_limit,
                     verbose=not args.quiet,
-                    cuts=args.cuts,
+                    biclique=args.biclique,
                     cardinality=args.cardinality,
                 ),
             ]
@@ -2891,7 +2913,7 @@ def main() -> None:
                 solve_gurobi_quadratic(
                     instance,
                     args.time_limit,
-                    cuts=args.cuts,
+                    biclique=args.biclique,
                     verbose=not args.quiet,
                     cardinality=args.cardinality,
                 ),
@@ -2901,7 +2923,7 @@ def main() -> None:
                 solve_gurobi_linearized(
                     instance,
                     args.time_limit,
-                    cuts=args.cuts,
+                    biclique=args.biclique,
                     verbose=not args.quiet,
                     cardinality=args.cardinality,
                 ),
@@ -2913,7 +2935,7 @@ def main() -> None:
                     instance,
                     args.time_limit,
                     verbose=not args.quiet,
-                    cuts=args.cuts,
+                    biclique=args.biclique,
                     cardinality=args.cardinality,
                 ),
             ]
@@ -2922,7 +2944,7 @@ def main() -> None:
                 solve_gurobi_linearized_root(
                     instance,
                     args.time_limit,
-                    cuts=args.cuts,
+                    biclique=args.biclique,
                     verbose=not args.quiet,
                     cardinality=args.cardinality,
                 ),
@@ -2935,7 +2957,7 @@ def main() -> None:
             started_at=started_at,
             finished_at=finished_at,
             time_limit=args.time_limit,
-            cuts_mode=args.cuts,
+            biclique_enabled=args.biclique,
             cardinality_enabled=args.cardinality,
         )
         all_summary_rows.extend(summary_rows)
@@ -2950,7 +2972,7 @@ def main() -> None:
                 started_at=started_at,
                 finished_at=finished_at,
                 time_limit=args.time_limit,
-                cuts_mode=args.cuts,
+                biclique_enabled=args.biclique,
                 cardinality_enabled=args.cardinality,
             )
             write_json(json_path, payload)
