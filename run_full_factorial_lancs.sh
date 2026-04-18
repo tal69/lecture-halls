@@ -63,10 +63,10 @@ run_case() {
     biclique_label="biclique"
   fi
 
-  local cardinality_label="no-cardinality"
+  local cardinality_label="no-capacity-dom"
   if [[ "$use_cardinality" == "1" ]]; then
-    cmd+=("--cardinality")
-    cardinality_label="cardinality"
+    cmd+=("--capacity-dom")
+    cardinality_label="capacity-dom"
   fi
 
   echo "===================================================================="

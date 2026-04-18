@@ -141,8 +141,8 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--cardinality",
-        dest="cardinality",
+        "--capacity-dom",
+        dest="capacity_dom",
         action="store_true",
         help=(
             "Enable capacity-dominance cardinality constraints derived from maximal "
@@ -2891,21 +2891,21 @@ def main() -> None:
                     args.time_limit,
                     biclique=args.biclique,
                     verbose=not args.quiet,
-                    cardinality=args.cardinality,
+                    cardinality=args.capacity_dom,
                 ),
                 solve_gurobi_linearized(
                     instance,
                     args.time_limit,
                     biclique=args.biclique,
                     verbose=not args.quiet,
-                    cardinality=args.cardinality,
+                    cardinality=args.capacity_dom,
                 ),
                 solve_cp_sat(
                     instance,
                     args.time_limit,
                     verbose=not args.quiet,
                     biclique=args.biclique,
-                    cardinality=args.cardinality,
+                    cardinality=args.capacity_dom,
                 ),
             ]
         elif args.model == "MIPQ":
@@ -2915,7 +2915,7 @@ def main() -> None:
                     args.time_limit,
                     biclique=args.biclique,
                     verbose=not args.quiet,
-                    cardinality=args.cardinality,
+                    cardinality=args.capacity_dom,
                 ),
             ]
         elif args.model == "MIP":
@@ -2925,7 +2925,7 @@ def main() -> None:
                     args.time_limit,
                     biclique=args.biclique,
                     verbose=not args.quiet,
-                    cardinality=args.cardinality,
+                    cardinality=args.capacity_dom,
                 ),
             ]
 
@@ -2936,7 +2936,7 @@ def main() -> None:
                     args.time_limit,
                     verbose=not args.quiet,
                     biclique=args.biclique,
-                    cardinality=args.cardinality,
+                    cardinality=args.capacity_dom,
                 ),
             ]
         else:
@@ -2946,7 +2946,7 @@ def main() -> None:
                     args.time_limit,
                     biclique=args.biclique,
                     verbose=not args.quiet,
-                    cardinality=args.cardinality,
+                    cardinality=args.capacity_dom,
                 ),
             ]
 
@@ -2958,7 +2958,7 @@ def main() -> None:
             finished_at=finished_at,
             time_limit=args.time_limit,
             biclique_enabled=args.biclique,
-            cardinality_enabled=args.cardinality,
+            cardinality_enabled=args.capacity_dom,
         )
         all_summary_rows.extend(summary_rows)
         write_excel(output_path, summary_rows)
@@ -2973,7 +2973,7 @@ def main() -> None:
                 finished_at=finished_at,
                 time_limit=args.time_limit,
                 biclique_enabled=args.biclique,
-                cardinality_enabled=args.cardinality,
+                cardinality_enabled=args.capacity_dom,
             )
             write_json(json_path, payload)
             print(f"JSON written to: {json_path}")
