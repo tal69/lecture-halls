@@ -166,7 +166,7 @@ python lecture_hall_experiment.py \
 ### Factorial Experiments
 
 The repository includes several shell scripts to automate running comprehensive factorial parameter sweeps across the dataset:
-- `run_full_factorial_all.sh`: Runs the exact solvers (`MIPQ`, `MIP`, `CP`) with all eight combinations of biclique strengthening, cardinality (capacity-dominance) constraints, and compatibility preprocessing on the 5 largest ITC 2019 instances (5 daily instances of the quadratic hall assignment problem for each, so 25 instances in total).
+- `run_full_factorial_all.sh`: Runs the exact solvers (`MIPQ`, `MIP`, `CP`) with all eight combinations of biclique strengthening, capacity-dominance constraints, and compatibility preprocessing on the 5 largest ITC 2019 instances (5 daily instances of the quadratic hall assignment problem for each, so 25 instances in total).
 - `run_full_factorial_lancs.sh`: Runs the same exact solver sweep over the 10 individual weekdays extracted from the Lancaster `lancs_yr23` instance (10 daily instances - 5 from the weekdays of the most loaded week in the first and second terms).
 - `run_relaxations_factorial.sh`: Evaluates only the `ROOT` node linear relaxation bound across all 6 instances (5 ITC 2019 + Lancaster) to benchmark the gap-closing impact of the different biclique and preprocessing combinations.
 
@@ -195,7 +195,7 @@ Each script accepts the running time per instance as a parameter.
   - In `MIP`, this replaces the base pair-distance links by the extended biclique family built from the anchor pair `(h_1,h_2)` and also aggregates `SameAttendees` constraints over the same threshold sets.
   - In `MIPQ`, this adds the direct quadratic analogue of those biclique cuts to the bilinear walking term, and adds the analogous strengthening for soft `SameAttendees` penalties while keeping the soft penalties in the objective.
   - In `CP`, this enables the corresponding redundant propagation layer on the pair-distance variables together with the aggregated `SameAttendees` propagation.
-- `--cardinality`: enable the capacity-dominance cardinality constraints derived from maximal overlap cliques and hall-capacity thresholds.
+- `--capacity-dom`: enable the capacity-dominance cardinality constraints derived from maximal overlap cliques and hall-capacity thresholds.
   - Disabled by default.
   - Applies to `MIPQ`, `MIP`, `CP`, and `ROOT`.
 - `--model`: optional single model to solve.
