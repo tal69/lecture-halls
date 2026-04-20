@@ -795,6 +795,19 @@ def distance_extended_biclique_patterns(
     lecture_id_1: int,
     lecture_id_2: int,
 ) -> list[tuple[tuple[int, ...], tuple[int, ...], int]]:
+    """Generate the biclique distance patterns for a successor pair.
+
+    This is the direct implementation of Algorithm 1 (Section 3.4) in the paper.
+    For each anchor pair (h_1, h_2) in H(l_1) x H(l_2), the routine produces a
+    triple (S_1, S_2, delta) with
+        delta = d(h_1, h_2),
+        S_2   = { h in H(l_2) : d(h_1, h) >= delta },
+        S_1   = { h in H(l_1) : d(h, h'') >= delta for every h'' in S_2 }.
+    Distinct anchors that induce the same (S_1, S_2, delta) triple are collapsed
+    into a single pattern via the underlying set, so the returned list is
+    deduplicated. Any change to this routine must stay consistent with
+    Algorithm 1 in the paper.
+    """
     halls_1 = tuple(instance.compatibility[lecture_id_1])
     halls_2 = tuple(instance.compatibility[lecture_id_2])
     patterns: set[tuple[tuple[int, ...], tuple[int, ...], int]] = set()

@@ -229,6 +229,10 @@ Implementation note:
 
 It does **not** use the older four-index linearization with variables `y_(l1,l2,h1,h2)`.
 
+### Biclique pattern generation
+
+The anchor-based biclique construction is the direct implementation of **Algorithm 1** in Section 3.4 of the paper. The routine `distance_extended_biclique_patterns` in `lecture_hall_experiment.py` enumerates, for each successor pair `(l_1, l_2)` and each anchor hall pair `(h_1, h_2) \in H(l_1) \times H(l_2)`, the triple `(S_1, S_2, δ)` with `δ = d(h_1,h_2)`, `S_2 = {h ∈ H(l_2) : d(h_1,h) ≥ δ}`, and `S_1 = {h ∈ H(l_1) : d(h,h'') ≥ δ for every h'' ∈ S_2}`. The returned triples are deduplicated before any cut (or CP propagation) is posted. The same routine is reused by `MIP`, `MIPQ`, and `CP`.
+
 ## Compatibility Preprocessing
 
 The optional compatibility preprocessor uses OR-Tools CP-SAT on the hard constraints only:
