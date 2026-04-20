@@ -1,6 +1,6 @@
 # Quadratic Lecture Hall Assignment
 
-This repository contains data acquisition, instance-preparation, and exact optimization code for the lecture hall quadratic assignment problem. The main workflow is to transform realistic weekly timetabling and registration data into **single-day** lecture-to-hall assignment instances and then solve them with alternative exact formulations.
+This repository provides an exact optimization framework for the **Quadratic Lecture-Hall Assignment Problem (QLHAP)**, focused on minimizing student walking distances in university settings. By transforming real-world timetabling and registration data into optimal daily hall assignments, the project bridges the gap between theoretical Quadratic Assignment Problems (QAP) and operational campus scheduling. It features high-performance mathematical programming formulations (MIP, MIQP, and CP-SAT) strengthened by problem-specific biclique distance cuts, capable of solving large-scale institutional instances to proven optimality within seconds.
 
 The realistic-data pipeline currently supports:
 - the ITC 2019 university course timetabling benchmark XML files,
