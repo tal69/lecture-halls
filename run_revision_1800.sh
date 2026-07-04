@@ -25,13 +25,13 @@ mkdir -p "$LOG_DIR"
 echo "Time limit: ${TIME_LIMIT}s | Logs: ${LOG_DIR}/"
 
 echo "[1/3] ITC 2019 full factorial ..."
-./run_full_factorial_all.sh   "$TIME_LIMIT" 2>&1 | tee "$LOG_DIR/itc_factorial.log"
+bash run_full_factorial_all.sh   "$TIME_LIMIT" 2>&1 | tee "$LOG_DIR/itc_factorial.log"
 
 echo "[2/3] Lancaster 2023 full factorial ..."
-./run_full_factorial_lancs.sh "$TIME_LIMIT" 2>&1 | tee "$LOG_DIR/lancs_factorial.log"
+bash run_full_factorial_lancs.sh "$TIME_LIMIT" 2>&1 | tee "$LOG_DIR/lancs_factorial.log"
 
 echo "[3/3] Root relaxations ..."
-./run_relaxations_factorial.sh "$TIME_LIMIT" 2>&1 | tee "$LOG_DIR/relaxations.log"
+bash run_relaxations_factorial.sh "$TIME_LIMIT" 2>&1 | tee "$LOG_DIR/relaxations.log"
 
 echo
 echo "Revision campaign completed with time limit ${TIME_LIMIT}s."
