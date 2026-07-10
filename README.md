@@ -1,13 +1,13 @@
 # Quadratic Lecture Hall Assignment
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21294645.svg)](https://doi.org/10.5281/zenodo.21294645)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21294644.svg)](https://doi.org/10.5281/zenodo.21294644)
 
 This repository provides an exact optimization framework for the **Quadratic Lecture-Hall Assignment Problem (QLHAP)**, focused on minimizing student walking distances in university settings. By transforming real-world timetabling and registration data into optimal daily hall assignments, the project bridges the gap between theoretical Quadratic Assignment Problems (QAP) and operational campus scheduling. The revised paper reports the GUROBI MIQP and compact MIP formulations, strengthened by problem-specific biclique distance cuts. The repository also retains the OR-Tools CP-SAT implementation and result rows as a documented revision-stage attempt; those CP-SAT rows are not used in the revised paper tables because the compact MIP dominated them empirically.
 
 ## Release and Data Links
 
-- [GitHub release `v1.0.0`](https://github.com/tal69/lecture-halls/releases/tag/v1.0.0)
-- [Archived release on Zenodo](https://zenodo.org/records/21294645) ([DOI `10.5281/zenodo.21294645`](https://doi.org/10.5281/zenodo.21294645))
+- [GitHub release `v1.0.1`](https://github.com/tal69/lecture-halls/releases/tag/v1.0.1)
+- [Archived releases on Zenodo](https://doi.org/10.5281/zenodo.21294644) ([concept DOI `10.5281/zenodo.21294644`](https://doi.org/10.5281/zenodo.21294644))
 - [Official ITC 2019 website and source instances](https://www.itc2019.org/)
 - [Lancaster 2023 dataset](https://doi.org/10.17635/lancaster/researchdata/279) (CC BY)
 - [Third-party data sources, rights, and reconstruction instructions](THIRD_PARTY_DATA.md)
@@ -84,7 +84,7 @@ primary reproducibility targets.
 The paper workflow uses the following files and directories:
 
 - `lecture_hall_experiment.py`: main experiment runner.
-- `run_revision_1800.sh`: final shell entry point for reproducing the numerical results, using a 1800-second time limit per run.
+- `run_revision_1800.sh`: final shell entry point for reproducing the numerical results, using a 1800-second solver limit per run.
 - `run_full_factorial_all.sh`: ITC 2019 exact-solver factorial campaign invoked by `run_revision_1800.sh`.
 - `run_full_factorial_lancs.sh`: Lancaster exact-solver factorial campaign invoked by `run_revision_1800.sh`.
 - `run_relaxations_factorial.sh`: root-relaxation factorial campaign invoked by `run_revision_1800.sh`.
@@ -306,12 +306,12 @@ It outputs:
 - `root_diagnostics`: the root-node diagnostic summary for biclique vs no biclique.
 - `cp_attempt_summary`: a compact check of the retained CP-SAT rows.
 
-The method-time columns reproduce the manuscript convention: they use the
-workbook column `wall_clock_seconds`, which times cut generation, model
-construction, and the solver call for a formulation after compatibility
-preprocessing has already been applied. Compatibility-preprocessing cost is
-stored separately in `compatibility_preprocess_wall_seconds` and is summarized
-separately in the manuscript.
+The method-time columns use end-to-end wall time. For each run, the table
+generator adds `compatibility_preprocess_wall_seconds` to `wall_clock_seconds`;
+the latter times cut generation, model construction, and the solver call after
+compatibility preprocessing has been applied. The raw components remain in the
+workbooks, and the manuscript also summarizes the preprocessing component
+separately.
 
 ### Archived 300-Second Campaign
 
@@ -508,7 +508,7 @@ The repository includes several shell scripts to automate running comprehensive 
 - `run_full_factorial_all.sh`: Runs the exact solvers (`MIPQ`, `MIP`, `CP`) with all eight combinations of biclique strengthening, capacity-dominance constraints, and compatibility preprocessing on the 5 largest ITC 2019 instances (5 daily instances of the quadratic hall assignment problem for each, so 25 instances in total). The revised paper uses the `MIPQ` and `MIP` rows; the `CP` rows document the CP-SAT attempt.
 - `run_full_factorial_lancs.sh`: Runs the same exact solver sweep over the 10 individual weekdays extracted from the Lancaster `lancs_yr23` instance (10 daily instances - 5 from the weekdays of the most loaded week in the first and second terms). The revised paper again uses only the `MIPQ` and `MIP` rows.
 - `run_relaxations_factorial.sh`: Evaluates only the `ROOT` node linear relaxation bound across the same 35 daily instances (25 ITC 2019 days + 10 Lancaster days) to benchmark the gap-closing impact of the different biclique and preprocessing combinations.
-- `run_revision_1800.sh`: Runs the complete revision campaign with a default 1800-second time limit and timestamped logs.
+- `run_revision_1800.sh`: Runs the complete revision campaign with a default 1800-second solver limit and timestamped logs.
 
 The first three scripts accept the running time per instance as a positional
 argument. The final wrapper `run_revision_1800.sh` uses `TIME_LIMIT=1800` by
@@ -653,9 +653,9 @@ With `--instance-only`, the terminal output switches to a readable instance repo
 ## Citation and License
 
 The submitted code is available as [GitHub release
-`v1.0.0`](https://github.com/tal69/lecture-halls/releases/tag/v1.0.0) and as an
-immutable [Zenodo archive](https://zenodo.org/records/21294645) with DOI
-[`10.5281/zenodo.21294645`](https://doi.org/10.5281/zenodo.21294645). Citation
+`v1.0.1`](https://github.com/tal69/lecture-halls/releases/tag/v1.0.1). Its
+immutable Zenodo version and any later versions are grouped under concept DOI
+[`10.5281/zenodo.21294644`](https://doi.org/10.5281/zenodo.21294644). Citation
 metadata are provided in [`CITATION.cff`](CITATION.cff), which GitHub can render
 as APA or BibTeX.
 

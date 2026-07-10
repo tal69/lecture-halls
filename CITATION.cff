@@ -7,9 +7,9 @@ authors:
     given-names: "Tal"
     affiliation: "Tel Aviv University"
     orcid: "https://orcid.org/0000-0002-5960-2386"
-version: 1.0.0
+version: 1.0.1
 date-released: 2026-07-10
-doi: "10.5281/zenodo.21294645"
+doi: "10.5281/zenodo.21294644"
 license: MIT
 repository-code: "https://github.com/tal69/lecture-halls"
 keywords:

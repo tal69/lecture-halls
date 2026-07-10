@@ -6,11 +6,10 @@ numerical evidence.  The exact-method tables filter out the CP-SAT rows because
 CP-SAT was an attempted backend that was retained in the replication files but
 left out of the revised paper after it was empirically dominated.
 
-The method-time columns reproduce the manuscript convention: they use the
-workbook's wall_clock_seconds column, which times model construction plus the
-solver call for that formulation.  Compatibility-preprocessing time is recorded
-separately in compatibility_preprocess_wall_seconds and discussed separately in
-the manuscript.
+The method-time columns use end-to-end wall time.  For each run this is the
+workbook's wall_clock_seconds value, which times model construction plus the
+solver call, plus compatibility_preprocess_wall_seconds.  This charges a method
+that enables compatibility preprocessing for that required setup work.
 
 Outputs are written as CSV files when --output-dir is provided; otherwise the
 same tables are printed to stdout.
@@ -61,12 +60,11 @@ def numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
     ):
         if column in df.columns:
             df[column] = pd.to_numeric(df[column], errors="coerce")
-    if "total_wall_seconds" not in df.columns:
-        df["total_wall_seconds"] = (
-            df["wall_clock_seconds"].fillna(0.0)
-            + df["compatibility_preprocess_wall_seconds"].fillna(0.0)
-        )
-    df["table_time_seconds"] = df["wall_clock_seconds"]
+    df["total_wall_seconds"] = (
+        df["wall_clock_seconds"].fillna(0.0)
+        + df["compatibility_preprocess_wall_seconds"].fillna(0.0)
+    )
+    df["table_time_seconds"] = df["total_wall_seconds"]
     return df
 
 
@@ -211,13 +209,19 @@ def method_summary_table(exact: pd.DataFrame) -> pd.DataFrame:
                 "Mean time (s)": round(float(group["table_time_seconds"].mean()), 2),
             }
         )
-    order = {method_code(row): index for index, (_, row) in enumerate(
-        paper.drop_duplicates(
-            ["formulation", "compatibility_preprocess_mode", "biclique_enabled", "cardinality_enabled"]
-        )
-        .sort_values(["formulation", "compatibility_preprocess_mode", "biclique_enabled", "cardinality_enabled"])
-        .iterrows()
-    )}
+    combinations = (
+        {
+            "formulation": formulation,
+            "compatibility_preprocess_mode": preprocess,
+            "biclique_enabled": biclique,
+            "cardinality_enabled": cardinality,
+        }
+        for formulation in PAPER_FORMULATIONS
+        for preprocess in ("none", "light")
+        for biclique in (False, True)
+        for cardinality in (False, True)
+    )
+    order = {method_code(combination): index for index, combination in enumerate(combinations)}
     out = pd.DataFrame(rows)
     out["_order"] = out["Method"].map(order)
     return out.sort_values("_order").drop(columns="_order")
