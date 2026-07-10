@@ -20,7 +20,7 @@ The realistic-data pipeline currently supports:
 - preservation of the original hall set, capacities, and hall-to-hall distances,
 - reconstruction of student-flow successor pairs from timetable and registration records,
 - import or propagation of hall-assignment penalties,
-- and propagation of the additional side constraints discussed in Section 3.5, in particular hard and soft `SameRoom` and `SameAttendees`.
+- and propagation of the additional side constraints discussed in Section 3.4, in particular hard and soft `SameRoom` and `SameAttendees`.
 
 The optimization models minimize:
 - the walking burden induced by consecutive lectures that share students,
@@ -566,14 +566,14 @@ The current `MIP` model uses the **compact** linearization from the paper:
 
 Implementation note:
 - Without `--biclique`, `MIP` uses the base compact pair-distance links from the paper with the original weighted objective.
-- With `--biclique`, `MIP` uses the same anchor-based biclique construction as Section 3.4, and the implementation folds the common-student weight into the pair variable for scaling.
+- With `--biclique`, `MIP` uses the same anchor-based biclique construction as Section 3.3, and the implementation folds the common-student weight into the pair variable for scaling.
 - With `--biclique`, `MIPQ` keeps the walking objective bilinear and adds the corresponding quadratic biclique inequalities directly in the assignment variables.
 
 It does **not** use the older four-index linearization with variables `y_(l1,l2,h1,h2)`.
 
 ### Biclique pattern generation
 
-The anchor-based biclique construction is the direct implementation of **Algorithm 1** in Section 3.4 of the paper. The routine `distance_extended_biclique_patterns` in `lecture_hall_experiment.py` enumerates, for each successor pair `(l_1, l_2)` and each anchor hall pair `(h_1, h_2) \in H(l_1) \times H(l_2)`, the triple `(S_1, S_2, δ)` with `δ = d(h_1,h_2)`, `S_2 = {h ∈ H(l_2) : d(h_1,h) ≥ δ}`, and `S_1 = {h ∈ H(l_1) : d(h,h'') ≥ δ for every h'' ∈ S_2}`. The returned triples are deduplicated before any cut (or CP propagation) is posted. The same routine is reused by `MIP`, `MIPQ`, and `CP`.
+The anchor-based biclique construction is the direct implementation of **Algorithm 1** in Section 3.3 of the paper. The routine `distance_extended_biclique_patterns` in `lecture_hall_experiment.py` enumerates, for each successor pair `(l_1, l_2)` and each anchor hall pair `(h_1, h_2) \in H(l_1) \times H(l_2)`, the triple `(S_1, S_2, δ)` with `δ = d(h_1,h_2)`, `S_2 = {h ∈ H(l_2) : d(h_1,h) ≥ δ}`, and `S_1 = {h ∈ H(l_1) : d(h,h'') ≥ δ for every h'' ∈ S_2}`. The returned triples are deduplicated before any cut (or CP propagation) is posted. The same routine is reused by `MIP`, `MIPQ`, and `CP`.
 
 ## Compatibility Preprocessing
 
