@@ -1,6 +1,8 @@
 # Quadratic Lecture Hall Assignment
 
-This repository provides an exact optimization framework for the **Quadratic Lecture-Hall Assignment Problem (QLHAP)**, focused on minimizing student walking distances in university settings. By transforming real-world timetabling and registration data into optimal daily hall assignments, the project bridges the gap between theoretical Quadratic Assignment Problems (QAP) and operational campus scheduling. It features high-performance mathematical programming formulations (MIP, MIQP, and CP-SAT) strengthened by problem-specific biclique distance cuts, capable of solving large-scale institutional instances to proven optimality within seconds.
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21294645.svg)](https://doi.org/10.5281/zenodo.21294645)
+
+This repository provides an exact optimization framework for the **Quadratic Lecture-Hall Assignment Problem (QLHAP)**, focused on minimizing student walking distances in university settings. By transforming real-world timetabling and registration data into optimal daily hall assignments, the project bridges the gap between theoretical Quadratic Assignment Problems (QAP) and operational campus scheduling. The revised paper reports the GUROBI MIQP and compact MIP formulations, strengthened by problem-specific biclique distance cuts. The repository also retains the OR-Tools CP-SAT implementation and result rows as a documented revision-stage attempt; those CP-SAT rows are not used in the revised paper tables because the compact MIP dominated them empirically.
 
 The realistic-data pipeline currently supports:
 - the ITC 2019 university course timetabling benchmark XML files,
@@ -19,12 +21,16 @@ The current workflow includes:
 - realistic-data preparation for ITC 2019, including peak-week selection, weekday extraction, short-break inference, student-flow construction, hall-penalty import, and side-constraint extraction,
 - realistic-data preparation for Lancaster 2023, including `SameClass` contraction, peak-week selection by term, registration repair, and side-constraint projection,
 - optional capacity-dominance constraints and compatibility preprocessing,
-- three main solver backends:
+- solver backends:
   - GUROBI bilinear `MIPQ`,
   - GUROBI linearized `MIP`,
   - OR-Tools `CP`,
 - a `ROOT` mode for reporting the root-node bound of the linearized GUROBI model,
-- and a synthetic single-day instance generator for controlled experiments and stress tests.
+- and a synthetic single-day instance generator for controlled experiments and stress tests. These synthetic instances are not used in the numerical experiments reported in the paper.
+
+In the revised manuscript, the main exact-method tables use only `MIPQ` and
+`MIP` rows from the 1800-second workbooks. `CP` remains available for
+replication and comparison but is treated as an archived attempt.
 
 The script also supports an `--instance-only` path that skips solving, prints the optimization input in a readable terminal layout, and saves the same instance in JSON.
 
@@ -44,19 +50,342 @@ pip install pandas openpyxl gurobipy ortools
 
 `gurobipy` requires a valid Gurobi license for the `MIPQ`, `MIP`, and `ROOT` runs.
 
+For a clean reproducible environment, create and activate a virtual environment
+before installing the requirements:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+The numerical results in the paper depend on the solver versions, CPU, thread
+count, and license configuration available to Gurobi and OR-Tools. The scripts
+record the Python version, platform, host name, time limit, and solver/runtime
+metadata in the output workbooks, but exact wall-clock times can still vary
+across machines. Objective values, lower bounds, and optimality gaps are the
+primary reproducibility targets.
+
+## Reproducing the Paper Results
+
+### Repository Layout
+
+The paper workflow uses the following files and directories:
+
+- `lecture_hall_experiment.py`: main experiment runner.
+- `run_revision_1800.sh`: final shell entry point for reproducing the numerical results, using a 1800-second time limit per run.
+- `run_full_factorial_all.sh`: ITC 2019 exact-solver factorial campaign invoked by `run_revision_1800.sh`.
+- `run_full_factorial_lancs.sh`: Lancaster exact-solver factorial campaign invoked by `run_revision_1800.sh`.
+- `run_relaxations_factorial.sh`: root-relaxation factorial campaign invoked by `run_revision_1800.sh`.
+- `Numerical experiment results/`: archived result workbooks used by the manuscript figures and tables.
+- `data_manifests/`: checksums identifying the exact third-party source files used.
+- `THIRD_PARTY_DATA.md`: source locations, licenses, and redistribution notes.
+
+The `ITC2019/` source-data directory is intentionally not tracked. The code,
+checksums, and commands needed to recreate the processed inputs are tracked.
+
+The scripts write new workbooks to the repository root by default. Move or copy
+completed workbooks into `Numerical experiment results/` only after confirming
+that they are the intended canonical outputs.
+
+### Canonical Result Workbooks
+
+The repository includes six archived `.xlsx` workbooks under
+`Numerical experiment results/`. The revised paper is based only on the
+1800-second workbooks; the 300-second workbooks are retained for provenance and
+for comparing against the original submission.
+
+| Workbook | Rows | Role |
+| --- | ---: | --- |
+| `full_factorial_1800s.xlsx` | 600 | Final ITC 2019 exact campaign. Contains `MIPQ`, `MIP`, and archived `CP` rows. The revised paper uses only the `MIPQ` and `MIP` rows. |
+| `lancs_yr23_full_factorial_1800s.xlsx` | 240 | Final Lancaster 2023 exact campaign. Contains `MIPQ`, `MIP`, and archived `CP` rows. The revised paper uses only the `MIPQ` and `MIP` rows. |
+| `relaxations_factorial_1800s.xlsx` | 280 | Final root-node diagnostic campaign for the compact `MIP` formulation. Used for the revised paper's root-gap diagnostic. |
+| `full_factorial_300s.xlsx` | 600 | Archived ITC 2019 300-second exact campaign from the original computational study. Not used for revised-paper results. |
+| `lancs_yr23_full_factorial_300s.xlsx` | 240 | Archived Lancaster 2023 300-second exact campaign from the original computational study. Not used for revised-paper results. |
+| `relaxations_factorial_300s.xlsx` | 280 | Archived 300-second root-node diagnostic campaign. Not used for revised-paper results. |
+
+The two final exact workbooks therefore contain 840 exact-run rows in total:
+560 `MIPQ`/`MIP` rows used by the revised manuscript and 280 `CP` rows retained
+to document the CP-SAT attempt. The final root workbook contributes 280
+diagnostic `ROOT` rows.
+
+### Input Data and Rights
+
+The code is released under the MIT License, but that license does not apply to
+third-party input data. See `THIRD_PARTY_DATA.md` for the full source and rights
+statement.
+
+The paper uses five public ITC 2019 instances: `pu-proj-fal19`, `agh-fal17`,
+`muni-pdfx-fal17`, `pu-d9-fal19`, and `muni-pdf-spr16c`. Download each source
+XML and its published solution XML from the [official ITC 2019
+website](https://www.itc2019.org/), then place them at:
+
+```text
+ITC2019/<instance>.xml
+ITC2019/solution/<instance>.xml
+```
+
+The ITC site makes the competition files publicly available, but no explicit
+redistribution license was located. To avoid assigning an MIT license to
+third-party material, neither the source XML nor the derived day-level JSON is
+mirrored in this repository. The checksum manifest identifies the exact files:
+
+```bash
+shasum -a 256 -c data_manifests/itc2019_paper_inputs.sha256
+```
+
+After the ten ITC files are in place, regenerate the 25 processed weekday
+instances used by the paper with:
+
+```bash
+mkdir -p prepared_itc2019
+PYTHON_BIN="${PYTHON_BIN:-python}"
+for instance in pu-proj-fal19 agh-fal17 muni-pdfx-fal17 pu-d9-fal19 muni-pdf-spr16c; do
+  "$PYTHON_BIN" lecture_hall_experiment.py \
+    --source itc2019 \
+    --itc-instance "$instance" \
+    --instance-only \
+    --output "prepared_itc2019/${instance}.xlsx" \
+    --quiet
+done
+```
+
+`--instance-only` performs no optimization and writes one machine-readable JSON
+file for each selected weekday. Filenames contain a generation timestamp, but
+the optimization-instance content is deterministic for fixed source files and
+arguments.
+
+The Lancaster 2023 source is openly available under a CC BY license from
+[Lancaster University](https://doi.org/10.17635/lancaster/researchdata/279).
+Download the canonical `lancs-yr23.xml` file and place it at:
+
+```text
+ITC2019/lancs-yr23.xml
+```
+
+The file is approximately 154 MB and is not duplicated in this repository. If
+it is missing, the ITC and synthetic workflows remain available but the
+Lancaster campaign cannot be reproduced.
+
+Verify the Lancaster download separately with:
+
+```bash
+shasum -a 256 -c data_manifests/lancaster2023.sha256
+```
+
+### Quick Smoke Test
+
+Before launching a long campaign, run one small deterministic case:
+
+```bash
+python lecture_hall_experiment.py \
+    --source itc2019 \
+    --itc-instance muni-pdf-spr16c \
+    --itc-day 0 \
+    --model MIP \
+    --compatibility-preprocess light \
+    --biclique \
+    --time-limit 60 \
+    --output smoke_test.xlsx \
+    --quiet
+```
+
+This should create `smoke_test.xlsx` with one row on the `summary` sheet. Remove
+the file before repeating the smoke test if you want a clean workbook.
+
+### Full 1800-Second Paper Campaign
+
+The final numerical results are reproduced by the shell wrapper
+`run_revision_1800.sh`. It is the recommended entry point for reproducing the
+paper's computational campaign:
+
+```bash
+./run_revision_1800.sh
+```
+
+By default, the script sets `TIME_LIMIT=1800`, so every solver call receives a
+1800-second time budget. The wrapper runs three stages sequentially:
+
+```text
+1. bash run_full_factorial_all.sh 1800
+2. bash run_full_factorial_lancs.sh 1800
+3. bash run_relaxations_factorial.sh 1800
+```
+
+The stages are:
+- `run_full_factorial_all.sh`: exact-solver factorial campaign on the five selected ITC 2019 instances, with five weekdays per instance.
+- `run_full_factorial_lancs.sh`: exact-solver factorial campaign on the ten Lancaster day-level instances, covering five weekdays in each of two selected terms.
+- `run_relaxations_factorial.sh`: root-relaxation campaign over the same 35 day-level instances.
+
+Expected output files:
+
+```text
+full_factorial_1800s.xlsx
+lancs_yr23_full_factorial_1800s.xlsx
+relaxations_factorial_1800s.xlsx
+```
+
+The exact-solver stages call `lecture_hall_experiment.py` without `--model`,
+so they run all three implemented exact backends: `MIPQ`, `MIP`, and `CP`.
+This is intentional for replication. The revised paper filters the resulting
+exact workbooks to the 560 `MIPQ`/`MIP` rows when producing the reported tables;
+the 280 `CP` rows document the CP-SAT attempt that was left out of the revised
+paper narrative.
+
+The script also creates a timestamped log directory:
+
+```text
+logs_revision_1800s_YYYYMMDD_HHMMSS/
+```
+
+Each stage writes its own log file inside that directory. The wrapper uses
+`set -e`, so a failed stage aborts the remaining campaign while preserving any
+completed workbook and log files. The child scripts refuse to overwrite existing
+workbooks unless `OVERWRITE=1` is set:
+
+```bash
+OVERWRITE=1 ./run_revision_1800.sh
+```
+
+The shell scripts use `python` by default. To force a particular interpreter,
+for example the virtual environment created above, set `PYTHON_BIN`:
+
+```bash
+PYTHON_BIN=.venv/bin/python ./run_revision_1800.sh
+```
+
+To run the same wrapper with a different time budget, set `TIME_LIMIT`:
+
+```bash
+TIME_LIMIT=3600 ./run_revision_1800.sh
+```
+
+After verifying the generated workbooks, copy the intended canonical versions
+into `Numerical experiment results/` before regenerating the paper figures and
+tables.
+
+### Reproducing the Revised Section 4 Tables
+
+The revised manuscript's numerical tables can be regenerated directly from the
+canonical 1800-second workbooks with:
+
+```bash
+python generate_paper_tables.py
+```
+
+To save CSV copies of the reproduced tables:
+
+```bash
+python generate_paper_tables.py --output-dir generated_paper_tables
+```
+
+The script reads:
+
+```text
+Numerical experiment results/full_factorial_1800s.xlsx
+Numerical experiment results/lancs_yr23_full_factorial_1800s.xlsx
+Numerical experiment results/relaxations_factorial_1800s.xlsx
+```
+
+It outputs:
+
+- `results_overview`: the formulation-family summary table.
+- `best_methods`: the fastest and second-fastest exact methods by daily instance.
+- `method_summary`: the 16-row MIQP/MIP method-combination table.
+- `root_diagnostics`: the root-node diagnostic summary for biclique vs no biclique.
+- `cp_attempt_summary`: a compact check of the retained CP-SAT rows.
+
+The method-time columns reproduce the manuscript convention: they use the
+workbook column `wall_clock_seconds`, which times cut generation, model
+construction, and the solver call for a formulation after compatibility
+preprocessing has already been applied. Compatibility-preprocessing cost is
+stored separately in `compatibility_preprocess_wall_seconds` and is summarized
+separately in the manuscript.
+
+### Archived 300-Second Campaign
+
+The earlier 300-second workbooks in `Numerical experiment results/` can be
+reproduced by the three commands below. They produce the same row structure as
+the 1800-second campaign: 840 exact runs (`MIPQ`, `MIP`, and `CP`) and 280
+root-relaxation runs, for 1120 rows total. These commands document the archived
+300-second campaign from the original computational study; the revised paper's
+tables and root-gap diagnostic use only the 1800-second workbooks above.
+
+```bash
+./run_full_factorial_all.sh 300
+./run_full_factorial_lancs.sh 300
+./run_relaxations_factorial.sh 300
+```
+
+Expected output files:
+
+```text
+full_factorial_300s.xlsx
+lancs_yr23_full_factorial_300s.xlsx
+relaxations_factorial_300s.xlsx
+```
+
+The runner scripts refuse to overwrite an existing workbook. To intentionally
+rerun from scratch:
+
+```bash
+OVERWRITE=1 ./run_full_factorial_all.sh 300
+OVERWRITE=1 ./run_full_factorial_lancs.sh 300
+OVERWRITE=1 ./run_relaxations_factorial.sh 300
+```
+
+The shell scripts use `python` by default. To force a specific interpreter,
+for example the virtual environment created above, set `PYTHON_BIN`:
+
+```bash
+PYTHON_BIN=.venv/bin/python ./run_full_factorial_all.sh 300
+```
+
+### Verifying a Reported Data Claim
+
+The cross-course successor-flow share reported in the response letter can be
+recomputed with:
+
+```bash
+python verify_cross_course_share.py
+```
+
+On the checked-in data this reports 35 daily instances, a minimum share of about
+75%, a maximum of 100%, and a mean of about 91%.
+
 ## Real-World Data Preparation
 
 ### ITC 2019
 
-The script natively supports loading real-world XML instances from the International Timetabling Competition (ITC 2019).
-- **Week and Day Selection**: It selects the most loaded teaching week automatically if not specified, and by default retains only weekdays `0-4`.
-- **Student-Flow Inference**: It maps lecture-student records to construct consecutive successor pairs using a short-break threshold that can be inferred from the timetable or provided manually.
-- **Capacity Fix**: It automatically handles anomalies where the published ITC solution places a lecture in a hall smaller than the recorded class size by reducing the student count only for those anomalies.
-- **Penalties and Side Constraints**: It imports the original hall-assignment penalties together with the hard and soft `SameRoom` and `SameAttendees` constraints defined in the XML data.
+The deterministic ITC preparation pipeline is implemented by
+`prepare_itc2019_inputs.py` and called by `lecture_hall_experiment.py`:
+
+1. Parse the official problem XML and the matching published solution XML.
+2. Reconstruct the room catalog, capacities, compatibility lists, room
+   penalties, and symmetric travel-time matrix.
+3. Select the teaching week with the largest number of active room-requiring
+   classes unless `--itc-week-index` is supplied.
+4. Expand the selected solution into daily lecture records and retain weekdays
+   `0-4` unless `--itc-day` selects one day explicitly.
+5. Reconstruct each lecture's registered students from the solution and form
+   directed successor pairs when the same students attend temporally
+   consecutive lectures within the inferred short-break threshold.
+6. Apply the documented capacity correction only when the published solution
+   places a class in a room smaller than its recorded enrollment.
+7. Project hard and soft `SameRoom` and `SameAttendees` constraints onto each
+   daily instance and retain the original room-assignment penalties.
+8. Build the final hall-assignment instance containing lectures, halls,
+   compatibilities, walking distances, successor weights, penalties, overlap
+   cliques, and provenance metadata.
+
+The `--instance-only` command above serializes this final optimization input to
+JSON without invoking a solver.
 
 ### Lancaster 2023
 
-The repository also supports a Lancaster-specific data-transformation path for `lancs-yr23.xml`.
+The repository also supports a Lancaster-specific data-transformation path for
+the CC BY `lancs-yr23.xml` dataset.
 - It merges `SameClass` components into representative activities before any day-level instance is created.
 - It identifies the two main teaching terms and selects the peak-load week of each term.
 - It keeps weekdays `0-4` by default and discards weekend activity unless a specific source day is requested.
@@ -65,7 +394,7 @@ The repository also supports a Lancaster-specific data-transformation path for `
 
 ## Synthetic Instance Generation
 
-The synthetic generator is retained for controlled experiments and stress testing. It also builds a **single-day** instance because the weekly problem is separable by day.
+The synthetic generator is retained for controlled experiments, debugging, and stress testing. The synthetic instances are **not** part of the numerical experiment reported in the paper; the reported computational results use only the ITC 2019 and Lancaster 2023 real-world day-level instances. The generator builds a **single-day** instance because the base weekly problem is separable by day when no cross-day side constraint is imposed.
 
 Lectures:
 - have duration `2` to `4` slots,
@@ -116,7 +445,7 @@ Determinism note:
 
 ## Usage
 
-The main entry point is `lecture_hall_experiment.py`. The paper workflow primarily uses the real-world data-preparation modes shown below. If `--source` is omitted, the script falls back to synthetic generation.
+The main entry point is `lecture_hall_experiment.py`. The paper workflow uses the real-world data-preparation modes shown below. If `--source` is omitted, the script falls back to synthetic generation, but those synthetic instances are for development and stress testing only and were not used in the paper's reported numerical experiment.
 
 Example using an ITC 2019 instance with preprocessing and biclique strengthening:
 
@@ -138,7 +467,7 @@ python lecture_hall_experiment.py \
     --instance-only
 ```
 
-Example with more options for synthetic generation:
+Example with more options for synthetic generation, for development or stress testing only:
 
 ```bash
 python lecture_hall_experiment.py \
@@ -166,11 +495,14 @@ python lecture_hall_experiment.py \
 ### Factorial Experiments
 
 The repository includes several shell scripts to automate running comprehensive factorial parameter sweeps across the dataset:
-- `run_full_factorial_all.sh`: Runs the exact solvers (`MIPQ`, `MIP`, `CP`) with all eight combinations of biclique strengthening, capacity-dominance constraints, and compatibility preprocessing on the 5 largest ITC 2019 instances (5 daily instances of the quadratic hall assignment problem for each, so 25 instances in total).
-- `run_full_factorial_lancs.sh`: Runs the same exact solver sweep over the 10 individual weekdays extracted from the Lancaster `lancs_yr23` instance (10 daily instances - 5 from the weekdays of the most loaded week in the first and second terms).
-- `run_relaxations_factorial.sh`: Evaluates only the `ROOT` node linear relaxation bound across all 6 instances (5 ITC 2019 + Lancaster) to benchmark the gap-closing impact of the different biclique and preprocessing combinations.
+- `run_full_factorial_all.sh`: Runs the exact solvers (`MIPQ`, `MIP`, `CP`) with all eight combinations of biclique strengthening, capacity-dominance constraints, and compatibility preprocessing on the 5 largest ITC 2019 instances (5 daily instances of the quadratic hall assignment problem for each, so 25 instances in total). The revised paper uses the `MIPQ` and `MIP` rows; the `CP` rows document the CP-SAT attempt.
+- `run_full_factorial_lancs.sh`: Runs the same exact solver sweep over the 10 individual weekdays extracted from the Lancaster `lancs_yr23` instance (10 daily instances - 5 from the weekdays of the most loaded week in the first and second terms). The revised paper again uses only the `MIPQ` and `MIP` rows.
+- `run_relaxations_factorial.sh`: Evaluates only the `ROOT` node linear relaxation bound across the same 35 daily instances (25 ITC 2019 days + 10 Lancaster days) to benchmark the gap-closing impact of the different biclique and preprocessing combinations.
+- `run_revision_1800.sh`: Runs the complete revision campaign with a default 1800-second time limit and timestamped logs.
 
-Each script accepts the running time per instance as a parameter.
+The first three scripts accept the running time per instance as a positional
+argument. The final wrapper `run_revision_1800.sh` uses `TIME_LIMIT=1800` by
+default and can be overridden by setting the `TIME_LIMIT` environment variable.
 
 
 ## Command-Line Arguments
@@ -201,7 +533,7 @@ Each script accepts the running time per instance as a parameter.
 - `--model`: optional single model to solve.
   - `MIPQ`: bilinear GUROBI formulation.
   - `MIP`: compact linearized GUROBI formulation.
-  - `CP`: OR-Tools CP-SAT formulation.
+  - `CP`: OR-Tools CP-SAT formulation, retained as a documented attempted backend but excluded from the revised paper tables.
   - `ROOT`: root-node bound of the linearized GUROBI formulation.
   - If omitted, the script solves `MIPQ`, `MIP`, and `CP`.
 - `--compatibility-preprocess {none,full,light}`: optional CP-SAT preprocessing that shrinks the compatible set `H(l)` before any solver is built.
@@ -269,7 +601,7 @@ The Excel file contains a single `summary` sheet. Repeated runs append new rows 
 - lower bound,
 - best global lower bound across solved methods for that instance,
 - optimality gap and global optimality gap,
-- runtime information (including detailed wall-clock timings for model construction phrases),
+- runtime information (including detailed wall-clock timings for model construction phases),
 - selected linearized cut mode.
 
 ### JSON export
@@ -307,3 +639,13 @@ With `--instance-only`, the terminal output switches to a readable instance repo
 - the lectures table,
 - realized successor pairs,
 - and the hall distance matrix.
+
+## Citation and License
+
+The archived `v1.0.0` release is available at
+<https://doi.org/10.5281/zenodo.21294645>. Citation metadata are provided in
+`CITATION.cff`, which GitHub can render as APA or BibTeX.
+
+The original software and documentation are released under the MIT License.
+Third-party input datasets retain their own rights and are not covered by the
+MIT License; see `THIRD_PARTY_DATA.md`.

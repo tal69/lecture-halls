@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the archived release."
+title: "Quadratic Lecture Hall Assignment"
+type: software
+authors:
+  - family-names: "Raviv"
+    given-names: "Tal"
+    affiliation: "Tel Aviv University"
+    orcid: "https://orcid.org/0000-0002-5960-2386"
+version: 1.0.0
+date-released: 2026-07-10
+doi: "10.5281/zenodo.21294645"
+license: MIT
+repository-code: "https://github.com/tal69/lecture-halls"
+keywords:
+  - quadratic assignment problem
+  - lecture hall assignment
+  - university timetabling
+  - mixed-integer programming
+  - reproducible research
