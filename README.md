@@ -4,6 +4,16 @@
 
 This repository provides an exact optimization framework for the **Quadratic Lecture-Hall Assignment Problem (QLHAP)**, focused on minimizing student walking distances in university settings. By transforming real-world timetabling and registration data into optimal daily hall assignments, the project bridges the gap between theoretical Quadratic Assignment Problems (QAP) and operational campus scheduling. The revised paper reports the GUROBI MIQP and compact MIP formulations, strengthened by problem-specific biclique distance cuts. The repository also retains the OR-Tools CP-SAT implementation and result rows as a documented revision-stage attempt; those CP-SAT rows are not used in the revised paper tables because the compact MIP dominated them empirically.
 
+## Release and Data Links
+
+- [GitHub release `v1.0.0`](https://github.com/tal69/lecture-halls/releases/tag/v1.0.0)
+- [Archived release on Zenodo](https://zenodo.org/records/21294645) ([DOI `10.5281/zenodo.21294645`](https://doi.org/10.5281/zenodo.21294645))
+- [Official ITC 2019 website and source instances](https://www.itc2019.org/)
+- [Lancaster 2023 dataset](https://doi.org/10.17635/lancaster/researchdata/279) (CC BY)
+- [Third-party data sources, rights, and reconstruction instructions](THIRD_PARTY_DATA.md)
+- [Source-file checksum manifests](data_manifests/)
+- [MIT software license](LICENSE) and [citation metadata](CITATION.cff)
+
 The realistic-data pipeline currently supports:
 - the ITC 2019 university course timetabling benchmark XML files,
 - the Lancaster 2023 institutional timetable and anonymized registration data,
@@ -642,10 +652,14 @@ With `--instance-only`, the terminal output switches to a readable instance repo
 
 ## Citation and License
 
-The archived `v1.0.0` release is available at
-<https://doi.org/10.5281/zenodo.21294645>. Citation metadata are provided in
-`CITATION.cff`, which GitHub can render as APA or BibTeX.
+The submitted code is available as [GitHub release
+`v1.0.0`](https://github.com/tal69/lecture-halls/releases/tag/v1.0.0) and as an
+immutable [Zenodo archive](https://zenodo.org/records/21294645) with DOI
+[`10.5281/zenodo.21294645`](https://doi.org/10.5281/zenodo.21294645). Citation
+metadata are provided in [`CITATION.cff`](CITATION.cff), which GitHub can render
+as APA or BibTeX.
 
-The original software and documentation are released under the MIT License.
-Third-party input datasets retain their own rights and are not covered by the
-MIT License; see `THIRD_PARTY_DATA.md`.
+The original software and documentation are released under the [MIT
+License](LICENSE). Third-party input datasets retain their own rights and are
+not covered by the MIT License; see the [third-party data and reconstruction
+notes](THIRD_PARTY_DATA.md).
