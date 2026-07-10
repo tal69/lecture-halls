@@ -7,7 +7,8 @@ This repository provides an exact optimization framework for the **Quadratic Lec
 ## Release and Data Links
 
 - [GitHub release `v1.0.1`](https://github.com/tal69/lecture-halls/releases/tag/v1.0.1)
-- [Archived releases on Zenodo](https://doi.org/10.5281/zenodo.21294644) ([concept DOI `10.5281/zenodo.21294644`](https://doi.org/10.5281/zenodo.21294644))
+- [Exact `v1.0.1` archive on Zenodo](https://doi.org/10.5281/zenodo.21297968)
+- [All archived versions on Zenodo](https://doi.org/10.5281/zenodo.21294644) (concept DOI)
 - [Official ITC 2019 website and source instances](https://www.itc2019.org/)
 - [Lancaster 2023 dataset](https://doi.org/10.17635/lancaster/researchdata/279) (CC BY)
 - [Third-party data sources, rights, and reconstruction instructions](THIRD_PARTY_DATA.md)
@@ -654,7 +655,9 @@ With `--instance-only`, the terminal output switches to a readable instance repo
 
 The submitted code is available as [GitHub release
 `v1.0.1`](https://github.com/tal69/lecture-halls/releases/tag/v1.0.1). Its
-immutable Zenodo version and any later versions are grouped under concept DOI
+exact immutable archive is Zenodo DOI
+[`10.5281/zenodo.21297968`](https://doi.org/10.5281/zenodo.21297968). This and
+any later versions are grouped under concept DOI
 [`10.5281/zenodo.21294644`](https://doi.org/10.5281/zenodo.21294644). Citation
 metadata are provided in [`CITATION.cff`](CITATION.cff), which GitHub can render
 as APA or BibTeX.
