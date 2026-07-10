@@ -2,12 +2,12 @@
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21294644.svg)](https://doi.org/10.5281/zenodo.21294644)
 
-This repository provides an exact optimization framework for the **Quadratic Lecture-Hall Assignment Problem (QLHAP)**, focused on minimizing student walking distances in university settings. By transforming real-world timetabling and registration data into optimal daily hall assignments, the project bridges the gap between theoretical Quadratic Assignment Problems (QAP) and operational campus scheduling. The revised paper reports the GUROBI MIQP and compact MIP formulations, strengthened by problem-specific biclique distance cuts. The repository also retains the OR-Tools CP-SAT implementation and result rows as a documented revision-stage attempt; those CP-SAT rows are not used in the revised paper tables because the compact MIP dominated them empirically.
+This repository provides an exact optimization framework for the **Quadratic Lecture-Hall Assignment Problem (QLHAP)**, focused on minimizing student walking distances in university settings. By transforming real-world timetabling and registration data into optimal daily hall assignments, the project bridges the gap between theoretical Quadratic Assignment Problems (QAP) and operational campus scheduling. The revised paper reports the Gurobi MIQP and compact MIP formulations, strengthened by problem-specific biclique distance cuts. The repository also retains the OR-Tools CP-SAT implementation and result rows as a documented revision-stage attempt; those CP-SAT rows are not used in the revised paper tables because the compact MIP dominated them empirically.
 
 ## Release and Data Links
 
-- [GitHub release `v1.0.1`](https://github.com/tal69/lecture-halls/releases/tag/v1.0.1)
-- [Exact `v1.0.1` archive on Zenodo](https://doi.org/10.5281/zenodo.21297968)
+- [GitHub release `v1.0.2`](https://github.com/tal69/lecture-halls/releases/tag/v1.0.2)
+- [Exact `v1.0.2` archive on Zenodo](https://doi.org/10.5281/zenodo.21301888)
 - [All archived versions on Zenodo](https://doi.org/10.5281/zenodo.21294644) (concept DOI)
 - [Official ITC 2019 website and source instances](https://www.itc2019.org/)
 - [Lancaster 2023 dataset](https://doi.org/10.17635/lancaster/researchdata/279) (CC BY)
@@ -49,6 +49,7 @@ The script also supports an `--instance-only` path that skips solving, prints th
 
 Python `3.9+` with:
 - `pandas`
+- `numpy`
 - `openpyxl`
 - `gurobipy`
 - `ortools`
@@ -56,7 +57,7 @@ Python `3.9+` with:
 Install the Python packages with:
 
 ```bash
-pip install pandas openpyxl gurobipy ortools
+pip install pandas numpy openpyxl gurobipy ortools
 ```
 
 `gurobipy` requires a valid Gurobi license for the `MIPQ`, `MIP`, and `ROOT` runs.
@@ -71,12 +72,14 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-The numerical results in the paper depend on the solver versions, CPU, thread
-count, and license configuration available to Gurobi and OR-Tools. The scripts
-record the Python version, platform, host name, time limit, and solver/runtime
-metadata in the output workbooks, but exact wall-clock times can still vary
-across machines. Objective values, lower bounds, and optimality gaps are the
-primary reproducibility targets.
+The reported campaign used Python 3.10.16 and Gurobi 13.0 on Ubuntu 22.04, on
+an AMD Ryzen 9 5950X with 128 GB of RAM and 12 solver threads per run. The
+numerical results depend on the solver versions, CPU, thread count, and license
+configuration available to Gurobi and OR-Tools. The scripts record the Python
+version, platform, host name, time limit, solver family, and runtime metadata in
+the output workbooks, but exact wall-clock times can still vary across
+machines. Objective values, lower bounds, and optimality gaps are the primary
+reproducibility targets.
 
 ## Reproducing the Paper Results
 
@@ -89,6 +92,7 @@ The paper workflow uses the following files and directories:
 - `run_full_factorial_all.sh`: ITC 2019 exact-solver factorial campaign invoked by `run_revision_1800.sh`.
 - `run_full_factorial_lancs.sh`: Lancaster exact-solver factorial campaign invoked by `run_revision_1800.sh`.
 - `run_relaxations_factorial.sh`: root-relaxation factorial campaign invoked by `run_revision_1800.sh`.
+- `compute_baseline_walking.py`: reconstructs and verifies the status-quo comparison reported in Table 8.
 - `Numerical experiment results/`: archived result workbooks used by the manuscript figures and tables.
 - `data_manifests/`: checksums identifying the exact third-party source files used.
 - `THIRD_PARTY_DATA.md`: source locations, licenses, and redistribution notes.
@@ -313,6 +317,68 @@ the latter times cut generation, model construction, and the solver call after
 compatibility preprocessing has been applied. The raw components remain in the
 workbooks, and the manuscript also summarizes the preprocessing component
 separately.
+
+### Reproducing the Value-of-Optimization Comparison (Table 8)
+
+The status-quo comparison in Subsubsection 4.2.4 (Table 8) is reproduced with:
+
+```bash
+python compute_baseline_walking.py
+```
+
+The script rebuilds all 35 daily instances from the source data through the
+same loaders used by the experiment (`load_itc2019_day_instances` and
+`load_lancs_yr23_term_instances`), so it requires the ITC 2019 and Lancaster
+inputs to be reconstructed locally (see the third-party data notes below). For
+each instance it evaluates the model-implied walking burden of the status-quo
+hall assignment, that is, the hall each lecture uses in the source data
+(`Lecture.hidden_hall`: the published ITC competition room and the deployed
+Lancaster institutional room). Student-flow weights are reconstructed by the
+same documented loaders used in the paper; they are not observed pedestrian
+trajectories. The script compares the baseline with the smallest walking
+component observed among 1800-second MIQP/MIP runs that attain the best full
+objective. It also reports the largest observed component among those runs and
+the resulting percentage-point spread.
+
+Before computing the comparison, the script checks all 35 rebuilt instances
+against the solved workbooks on lecture count, hall count, total
+shared-enrollment weight, and the numbers of hard `SameRoom` and
+`SameAttendees` pairs. It then verifies that the status-quo assignment is
+feasible for the complete hard model: all recorded halls are compatible, no
+hall contains overlapping lectures, and all hard `SameRoom` and
+`SameAttendees` constraints are satisfied. A per-instance CSV is written to
+`tmp/baseline_value_of_optimization.csv`; the script creates this directory if
+it does not already exist.
+
+Subsubsection 4.2.4 and Table 8 of the paper report this comparison on the ten
+**Lancaster** daily instances only, because their status-quo assignment is the
+room plan the institution actually deployed (a genuine operational baseline),
+whereas the ITC fixed schedules are winning competition solutions optimizing
+the contest objective rather than deployed room plans. On the ten Lancaster
+days the selected best-objective runs reduce model-implied walking by 20.5% to
+45.3% (mean 31.9%, aggregate 32.7%). Selecting the largest rather than the
+smallest observed walking component among best-objective runs changes each
+Lancaster percentage by at most 0.31 percentage points. The script also prints
+and stores the analogous ITC figures for transparency (aggregate 15.8%; pooled
+19.6% over all 35 days).
+
+For each instance the script additionally reports the **per-pair distance
+floor**, `sum over active successor pairs of c * min compatible hall-to-hall
+distance`, a valid lower bound on the walking cost of any feasible assignment
+(each pair independently attains at least its closest compatible hall pair; a
+pair whose two lectures share a compatible hall contributes zero because both
+can occupy the same hall). This floor is a useful diagnostic for the ITC days
+that show little or no reduction: the four lightly loaded `muni-pdf` days
+(`w3d1`--`w3d4`) have selected optimized walking equal to the floor and a
+status-quo assignment that already attains it, so no reassignment can improve
+their walking burden; the script reports four of 35 instances at this floor.
+None of the ten Lancaster days is at the floor, and all ten independently show
+a positive baseline reduction. The floor condition explains the four
+zero-reduction ITC days but, by itself, failure to attain the floor would not
+prove that a baseline can be improved. The `walking_floor`, `at_floor`, and
+`observed_best_objective_walk_spread_pp` columns are included in the exported
+CSV. The floor pass adds a few seconds because it scans compatible hall pairs
+on the largest instances; the whole script completes in well under a minute.
 
 ### Archived 300-Second Campaign
 
@@ -654,9 +720,9 @@ With `--instance-only`, the terminal output switches to a readable instance repo
 ## Citation and License
 
 The submitted code is available as [GitHub release
-`v1.0.1`](https://github.com/tal69/lecture-halls/releases/tag/v1.0.1). Its
+`v1.0.2`](https://github.com/tal69/lecture-halls/releases/tag/v1.0.2). Its
 exact immutable archive is Zenodo DOI
-[`10.5281/zenodo.21297968`](https://doi.org/10.5281/zenodo.21297968). This and
+[`10.5281/zenodo.21301888`](https://doi.org/10.5281/zenodo.21301888). This and
 any later versions are grouped under concept DOI
 [`10.5281/zenodo.21294644`](https://doi.org/10.5281/zenodo.21294644). Citation
 metadata are provided in [`CITATION.cff`](CITATION.cff), which GitHub can render
