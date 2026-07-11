@@ -7,8 +7,9 @@ the hall each lecture actually used in the source data (the published ITC 2019
 competition room assignment and the real Lancaster 2023 institutional room
 assignment, stored as ``Lecture.hidden_hall``).  It contrasts that value with
 the smallest walking component observed among archived 1800-second MIQP/MIP
-runs that attain the best full-objective value for the instance.  It also
-reports the largest observed walking component among those runs.
+runs without compatibility preprocessing that attain the best full-objective
+value for the instance.  It also reports the largest observed walking component
+among those runs.
 
 The script verifies that the status-quo assignment is feasible for the complete
 hard model: every recorded hall is compatible, no hall hosts overlapping
@@ -44,6 +45,7 @@ ITC_SOURCES = [
     "pu-proj-fal19",
 ]
 PAPER_FORMULATIONS = ("quadratic_miqp", "linearized_milp")
+PAPER_PREPROCESS_MODE = "none"
 OBJ_TOL = 1e-4
 EXPECTED_INSTANCE_COUNT = 35
 SIGNATURE_COLUMNS = (
@@ -171,7 +173,10 @@ def optimal_walking() -> pd.DataFrame:
     itc = pd.read_excel(ITC_1800, sheet_name="summary")
     lan = pd.read_excel(LANCS_1800, sheet_name="summary")
     ex = pd.concat([itc, lan], ignore_index=True)
-    paper = ex[ex.formulation.isin(PAPER_FORMULATIONS)].copy()
+    paper = ex[
+        ex.formulation.isin(PAPER_FORMULATIONS)
+        & ex.compatibility_preprocess_mode.eq(PAPER_PREPROCESS_MODE)
+    ].copy()
     for col in ("objective_value", "total_student_walking_distance"):
         paper[col] = pd.to_numeric(paper[col], errors="coerce")
     rows = []

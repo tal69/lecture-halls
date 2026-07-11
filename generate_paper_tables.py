@@ -2,14 +2,14 @@
 """Reproduce the revised-paper numerical tables from archived workbooks.
 
 The revised manuscript uses only the 1800-second workbooks for its reported
-numerical evidence.  The exact-method tables filter out the CP-SAT rows because
-CP-SAT was an attempted backend that was retained in the replication files but
-left out of the revised paper after it was empirically dominated.
+numerical evidence.  The exact-method tables use only MIQP/MIP rows with
+compatibility preprocessing disabled.  CP-SAT and light compatibility
+preprocessing were exploratory tests retained in the replication files but
+left out of the revised paper after they were empirically dominated.
 
-The method-time columns use end-to-end wall time.  For each run this is the
-workbook's wall_clock_seconds value, which times model construction plus the
-solver call, plus compatibility_preprocess_wall_seconds.  This charges a method
-that enables compatibility preprocessing for that required setup work.
+The exploratory preprocessing summary uses end-to-end wall time.  For each run
+this is the workbook's wall_clock_seconds value, which times model construction
+plus the solver call, plus compatibility_preprocess_wall_seconds.
 
 Outputs are written as CSV files when --output-dir is provided; otherwise the
 same tables are printed to stdout.
@@ -31,6 +31,7 @@ LANCS_1800 = RESULT_DIR / "lancs_yr23_full_factorial_1800s.xlsx"
 ROOT_1800 = RESULT_DIR / "relaxations_factorial_1800s.xlsx"
 
 PAPER_FORMULATIONS = ("quadratic_miqp", "linearized_milp")
+PAPER_PREPROCESS_MODE = "none"
 FORMULATION_LABEL = {
     "quadratic_miqp": "MIQP",
     "linearized_milp": "MIP",
@@ -78,12 +79,19 @@ def load_exact_1800() -> pd.DataFrame:
     return exact
 
 
+def paper_exact(exact: pd.DataFrame) -> pd.DataFrame:
+    """Return the MIQP/MIP rows used by the revised paper."""
+    return exact[
+        exact["formulation"].isin(PAPER_FORMULATIONS)
+        & (exact["compatibility_preprocess_mode"] == PAPER_PREPROCESS_MODE)
+    ].copy()
+
+
 def method_code(row: pd.Series) -> str:
     formulation = FORMULATION_LABEL[row["formulation"]]
-    preprocess = "P" if row["compatibility_preprocess_mode"] == "light" else "noP"
     biclique = "B" if bool(row["biclique_enabled"]) else "noB"
     cardinality = "D" if bool(row["cardinality_enabled"]) else "noD"
-    return f"{formulation}-{preprocess}-{biclique}-{cardinality}"
+    return f"{formulation}-{biclique}-{cardinality}"
 
 
 def short_instance_name(name: str) -> str:
@@ -103,7 +111,7 @@ def short_instance_name(name: str) -> str:
 
 
 def overview_table(exact: pd.DataFrame) -> pd.DataFrame:
-    paper = exact[exact["formulation"].isin(PAPER_FORMULATIONS)].copy()
+    paper = paper_exact(exact)
     best_obj = paper.groupby("instance_name")["objective_value"].min()
     rows: list[dict[str, object]] = []
     for (family, formulation), group in paper.groupby(["instance_family", "formulation"]):
@@ -139,7 +147,7 @@ def overview_table(exact: pd.DataFrame) -> pd.DataFrame:
 
 
 def best_methods_table(exact: pd.DataFrame) -> pd.DataFrame:
-    paper = exact[exact["formulation"].isin(PAPER_FORMULATIONS)].copy()
+    paper = paper_exact(exact)
     paper["method"] = paper.apply(method_code, axis=1)
     best_obj = paper.groupby("instance_name")["objective_value"].min()
     rows: list[dict[str, object]] = []
@@ -160,6 +168,7 @@ def best_methods_table(exact: pd.DataFrame) -> pd.DataFrame:
         ].sort_values(["table_time_seconds", "method"])
         first = candidates.iloc[0]
         second = candidates.iloc[1] if len(candidates) > 1 else None
+        third = candidates.iloc[2] if len(candidates) > 2 else None
         rows.append(
             {
                 "Instance": short_instance_name(name),
@@ -167,22 +176,34 @@ def best_methods_table(exact: pd.DataFrame) -> pd.DataFrame:
                 "UB": int(round(opt)),
                 "Fastest method": first["method"],
                 "Time (s)": round(float(first["table_time_seconds"]), 2),
-                "Second method": second["method"] if second is not None else "",
+                "Second method": second["method"] if second is not None else "-",
                 "Second time (s)": round(float(second["table_time_seconds"]), 2)
                 if second is not None
-                else np.nan,
+                else "-",
+                "Third method": third["method"] if third is not None else "-",
+                "Third time (s)": round(float(third["table_time_seconds"]), 2)
+                if third is not None
+                else "-",
             }
         )
     return pd.DataFrame(rows)
 
 
 def method_summary_table(exact: pd.DataFrame) -> pd.DataFrame:
-    paper = exact[exact["formulation"].isin(PAPER_FORMULATIONS)].copy()
+    paper = paper_exact(exact)
     paper["method"] = paper.apply(method_code, axis=1)
     best_obj = paper.groupby("instance_name")["objective_value"].min()
     paper["found_optimum"] = paper.apply(
-        lambda row: pd.notna(row["objective_value"])
-        and np.isclose(row["objective_value"], best_obj.loc[row["instance_name"]], rtol=0, atol=OBJECTIVE_TOL),
+        lambda row: row["status"] == "OPTIMAL"
+        or (
+            pd.notna(row["objective_value"])
+            and np.isclose(
+                row["objective_value"],
+                best_obj.loc[row["instance_name"]],
+                rtol=0,
+                atol=OBJECTIVE_TOL,
+            )
+        ),
         axis=1,
     )
     fastest = (
@@ -212,12 +233,10 @@ def method_summary_table(exact: pd.DataFrame) -> pd.DataFrame:
     combinations = (
         {
             "formulation": formulation,
-            "compatibility_preprocess_mode": preprocess,
             "biclique_enabled": biclique,
             "cardinality_enabled": cardinality,
         }
         for formulation in PAPER_FORMULATIONS
-        for preprocess in ("none", "light")
         for biclique in (False, True)
         for cardinality in (False, True)
     )
@@ -229,8 +248,9 @@ def method_summary_table(exact: pd.DataFrame) -> pd.DataFrame:
 
 def root_diagnostics_table(exact: pd.DataFrame) -> pd.DataFrame:
     root = numeric_columns(load_workbook(ROOT_1800))
+    root = root[root["compatibility_preprocess_mode"] == PAPER_PREPROCESS_MODE].copy()
     opt = (
-        exact[exact["formulation"].isin(PAPER_FORMULATIONS)]
+        paper_exact(exact)
         .groupby("instance_name")["objective_value"]
         .min()
         .rename("optimum")
@@ -255,11 +275,44 @@ def root_diagnostics_table(exact: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def preprocessing_attempt_summary(exact: pd.DataFrame) -> pd.DataFrame:
+    """Summarize the archived light-preprocessing rows excluded from the paper."""
+    methods = exact[exact["formulation"].isin(PAPER_FORMULATIONS)].copy()
+    light = methods[methods["compatibility_preprocess_mode"] == "light"].copy()
+    if light.empty:
+        return pd.DataFrame()
+
+    fastest = methods.groupby("instance_name")["table_time_seconds"].min()
+    light_fastest = light.groupby("instance_name")["table_time_seconds"].min()
+    fastest_instances = sum(
+        np.isclose(value, fastest.loc[instance], rtol=0, atol=1e-7)
+        for instance, value in light_fastest.items()
+    )
+    return pd.DataFrame(
+        [
+            {
+                "Rows": len(light),
+                "Instances": light["instance_name"].nunique(),
+                "Fastest end-to-end instances": int(fastest_instances),
+                "Mean setup time (s)": round(
+                    float(light["compatibility_preprocess_wall_seconds"].mean()), 2
+                ),
+                "Median setup time (s)": round(
+                    float(light["compatibility_preprocess_wall_seconds"].median()), 2
+                ),
+                "Max setup time (s)": round(
+                    float(light["compatibility_preprocess_wall_seconds"].max()), 2
+                ),
+            }
+        ]
+    )
+
+
 def cp_attempt_summary(exact: pd.DataFrame) -> pd.DataFrame:
     cp = exact[exact["formulation"] == "cp_sat"].copy()
     if cp.empty:
         return pd.DataFrame()
-    paper = exact[exact["formulation"].isin(PAPER_FORMULATIONS)]
+    paper = paper_exact(exact)
     best_obj = paper.groupby("instance_name")["objective_value"].min()
     cp_best = cp.groupby("instance_name")["objective_value"].min()
     rows = [
@@ -310,6 +363,11 @@ def main() -> None:
     write_or_print("best_methods", best_methods_table(exact), args.output_dir)
     write_or_print("method_summary", method_summary_table(exact), args.output_dir)
     write_or_print("root_diagnostics", root_diagnostics_table(exact), args.output_dir)
+    write_or_print(
+        "preprocessing_attempt_summary",
+        preprocessing_attempt_summary(exact),
+        args.output_dir,
+    )
     write_or_print("cp_attempt_summary", cp_attempt_summary(exact), args.output_dir)
 
 

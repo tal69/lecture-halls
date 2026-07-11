@@ -2,12 +2,12 @@
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21294644.svg)](https://doi.org/10.5281/zenodo.21294644)
 
-This repository provides an exact optimization framework for the **Quadratic Lecture-Hall Assignment Problem (QLHAP)**, focused on minimizing student walking distances in university settings. By transforming real-world timetabling and registration data into optimal daily hall assignments, the project bridges the gap between theoretical Quadratic Assignment Problems (QAP) and operational campus scheduling. The revised paper reports the Gurobi MIQP and compact MIP formulations, strengthened by problem-specific biclique distance cuts. The repository also retains the OR-Tools CP-SAT implementation and result rows as a documented revision-stage attempt; those CP-SAT rows are not used in the revised paper tables because the compact MIP dominated them empirically.
+This repository provides an exact optimization framework for the **Quadratic Lecture-Hall Assignment Problem (QLHAP)**, focused on minimizing student walking distances in university settings. By transforming real-world timetabling and registration data into optimal daily hall assignments, the project bridges the gap between theoretical Quadratic Assignment Problems (QAP) and operational campus scheduling. The revised paper reports the Gurobi MIQP and compact MIP formulations and evaluates problem-specific biclique and capacity-dominance inequalities. The repository also retains two documented revision-stage exploratory tests: an OR-Tools CP-SAT formulation and light compatibility preprocessing. Neither is used in the revised paper tables.
 
 ## Release and Data Links
 
-- [GitHub release `v1.0.2`](https://github.com/tal69/lecture-halls/releases/tag/v1.0.2)
-- [Exact `v1.0.2` archive on Zenodo](https://doi.org/10.5281/zenodo.21301888)
+- [GitHub release `v1.0.3`](https://github.com/tal69/lecture-halls/releases/tag/v1.0.3)
+- [Exact `v1.0.3` archive on Zenodo](https://doi.org/10.5281/zenodo.21310605)
 - [All archived versions on Zenodo](https://doi.org/10.5281/zenodo.21294644) (concept DOI)
 - [Official ITC 2019 website and source instances](https://www.itc2019.org/)
 - [Lancaster 2023 dataset](https://doi.org/10.17635/lancaster/researchdata/279) (CC BY)
@@ -31,7 +31,7 @@ The optimization models minimize:
 The current workflow includes:
 - realistic-data preparation for ITC 2019, including peak-week selection, weekday extraction, short-break inference, student-flow construction, hall-penalty import, and side-constraint extraction,
 - realistic-data preparation for Lancaster 2023, including `SameClass` contraction, peak-week selection by term, registration repair, and side-constraint projection,
-- optional capacity-dominance constraints and compatibility preprocessing,
+- optional capacity-dominance constraints and exploratory light compatibility preprocessing,
 - solver backends:
   - GUROBI bilinear `MIPQ`,
   - GUROBI linearized `MIP`,
@@ -39,9 +39,11 @@ The current workflow includes:
 - a `ROOT` mode for reporting the root-node bound of the linearized GUROBI model,
 - and a synthetic single-day instance generator for controlled experiments and stress tests. These synthetic instances are not used in the numerical experiments reported in the paper.
 
-In the revised manuscript, the main exact-method tables use only `MIPQ` and
-`MIP` rows from the 1800-second workbooks. `CP` remains available for
-replication and comparison but is treated as an archived attempt.
+In the revised manuscript, the exact-method tables use only 1800-second `MIPQ`
+and `MIP` rows with `compatibility_preprocess_mode = none`; the root diagnostic
+similarly uses only `ROOT` rows with that setting. The `CP` rows and all rows
+with `compatibility_preprocess_mode = light` remain available for transparency
+and exploratory comparison but are not part of the reported experiment.
 
 The script also supports an `--instance-only` path that skips solving, prints the optimization input in a readable terminal layout, and saves the same instance in JSON.
 
@@ -113,17 +115,18 @@ for comparing against the original submission.
 
 | Workbook | Rows | Role |
 | --- | ---: | --- |
-| `full_factorial_1800s.xlsx` | 600 | Final ITC 2019 exact campaign. Contains `MIPQ`, `MIP`, and archived `CP` rows. The revised paper uses only the `MIPQ` and `MIP` rows. |
-| `lancs_yr23_full_factorial_1800s.xlsx` | 240 | Final Lancaster 2023 exact campaign. Contains `MIPQ`, `MIP`, and archived `CP` rows. The revised paper uses only the `MIPQ` and `MIP` rows. |
-| `relaxations_factorial_1800s.xlsx` | 280 | Final root-node diagnostic campaign for the compact `MIP` formulation. Used for the revised paper's root-gap diagnostic. |
+| `full_factorial_1800s.xlsx` | 600 | Final ITC 2019 exact campaign. The paper uses the 200 no-preprocessing `MIPQ`/`MIP` rows; 200 light-preprocessing `MIPQ`/`MIP` rows and 200 `CP` rows are exploratory. |
+| `lancs_yr23_full_factorial_1800s.xlsx` | 240 | Final Lancaster 2023 exact campaign. The paper uses the 80 no-preprocessing `MIPQ`/`MIP` rows; 80 light-preprocessing `MIPQ`/`MIP` rows and 80 `CP` rows are exploratory. |
+| `relaxations_factorial_1800s.xlsx` | 280 | Final root-node diagnostic campaign. The paper uses the 140 rows with `compatibility_preprocess_mode = none`; the 140 light-preprocessing rows are exploratory. |
 | `full_factorial_300s.xlsx` | 600 | Archived ITC 2019 300-second exact campaign from the original computational study. Not used for revised-paper results. |
 | `lancs_yr23_full_factorial_300s.xlsx` | 240 | Archived Lancaster 2023 300-second exact campaign from the original computational study. Not used for revised-paper results. |
 | `relaxations_factorial_300s.xlsx` | 280 | Archived 300-second root-node diagnostic campaign. Not used for revised-paper results. |
 
-The two final exact workbooks therefore contain 840 exact-run rows in total:
-560 `MIPQ`/`MIP` rows used by the revised manuscript and 280 `CP` rows retained
-to document the CP-SAT attempt. The final root workbook contributes 280
-diagnostic `ROOT` rows.
+The two final exact workbooks therefore contain 840 rows: 280 no-preprocessing
+`MIPQ`/`MIP` rows used by the revised manuscript, 280 light-preprocessing
+`MIPQ`/`MIP` rows retained as an exploratory test, and 280 `CP` rows retained to
+document the CP-SAT attempt. The final root workbook contains 140 reported
+no-preprocessing `ROOT` rows and 140 exploratory light-preprocessing rows.
 
 ### Input Data and Rights
 
@@ -199,7 +202,6 @@ python lecture_hall_experiment.py \
     --itc-instance muni-pdf-spr16c \
     --itc-day 0 \
     --model MIP \
-    --compatibility-preprocess light \
     --biclique \
     --time-limit 60 \
     --output smoke_test.xlsx \
@@ -241,12 +243,14 @@ lancs_yr23_full_factorial_1800s.xlsx
 relaxations_factorial_1800s.xlsx
 ```
 
-The exact-solver stages call `lecture_hall_experiment.py` without `--model`,
-so they run all three implemented exact backends: `MIPQ`, `MIP`, and `CP`.
-This is intentional for replication. The revised paper filters the resulting
-exact workbooks to the 560 `MIPQ`/`MIP` rows when producing the reported tables;
-the 280 `CP` rows document the CP-SAT attempt that was left out of the revised
-paper narrative.
+The exact-solver stages call `lecture_hall_experiment.py` without `--model`, so
+they run all three implemented exact backends: `MIPQ`, `MIP`, and `CP`. The
+factorial scripts also run both `none` and `light` compatibility-preprocessing
+modes. This intentional superset preserves the exploratory tests. The table
+generator filters the exact workbooks to the 280 `MIPQ`/`MIP` rows with
+`compatibility_preprocess_mode = none` and the root workbook to the corresponding
+140 `ROOT` rows. The remaining 280 light-preprocessing `MIPQ`/`MIP` rows, 140
+light-preprocessing `ROOT` rows, and 280 `CP` rows are not used in the paper.
 
 The script also creates a timestamped log directory:
 
@@ -306,17 +310,18 @@ Numerical experiment results/relaxations_factorial_1800s.xlsx
 It outputs:
 
 - `results_overview`: the formulation-family summary table.
-- `best_methods`: the fastest and second-fastest exact methods by daily instance.
-- `method_summary`: the 16-row MIQP/MIP method-combination table.
+- `best_methods`: the three fastest available exact methods and their times by daily instance, with `-` for unavailable second or third qualifying methods.
+- `method_summary`: the 8-row no-preprocessing MIQP/MIP method-combination table.
 - `root_diagnostics`: the root-node diagnostic summary for biclique vs no biclique.
+- `preprocessing_attempt_summary`: an audit of the exploratory light-preprocessing rows.
 - `cp_attempt_summary`: a compact check of the retained CP-SAT rows.
 
-The method-time columns use end-to-end wall time. For each run, the table
-generator adds `compatibility_preprocess_wall_seconds` to `wall_clock_seconds`;
-the latter times cut generation, model construction, and the solver call after
-compatibility preprocessing has been applied. The raw components remain in the
-workbooks, and the manuscript also summarizes the preprocessing component
-separately.
+The reported method-time columns use `wall_clock_seconds` from the
+no-preprocessing rows. This field includes cut generation, model construction,
+and the solver call. For the separate preprocessing audit, the generator adds
+`compatibility_preprocess_wall_seconds` to `wall_clock_seconds` so that the
+exploratory comparison charges the complete preprocessing cost. Both raw timing
+components remain in the workbooks.
 
 ### Reproducing the Value-of-Optimization Comparison (Table 8)
 
@@ -336,9 +341,9 @@ hall assignment, that is, the hall each lecture uses in the source data
 Lancaster institutional room). Student-flow weights are reconstructed by the
 same documented loaders used in the paper; they are not observed pedestrian
 trajectories. The script compares the baseline with the smallest walking
-component observed among 1800-second MIQP/MIP runs that attain the best full
-objective. It also reports the largest observed component among those runs and
-the resulting percentage-point spread.
+component observed among no-preprocessing 1800-second MIQP/MIP runs that attain
+the best full objective. It also reports the largest observed component among
+those runs and the resulting percentage-point spread.
 
 Before computing the comparison, the script checks all 35 rebuilt instances
 against the solved workbooks on lecture count, hall count, total
@@ -359,7 +364,7 @@ days the selected best-objective runs reduce model-implied walking by 20.5% to
 45.3% (mean 31.9%, aggregate 32.7%). Selecting the largest rather than the
 smallest observed walking component among best-objective runs changes each
 Lancaster percentage by at most 0.31 percentage points. The script also prints
-and stores the analogous ITC figures for transparency (aggregate 15.8%; pooled
+and stores the analogous ITC figures for transparency (aggregate 15.7%; pooled
 19.6% over all 35 days).
 
 For each instance the script additionally reports the **per-pair distance
@@ -524,13 +529,13 @@ Determinism note:
 
 The main entry point is `lecture_hall_experiment.py`. The paper workflow uses the real-world data-preparation modes shown below. If `--source` is omitted, the script falls back to synthetic generation, but those synthetic instances are for development and stress testing only and were not used in the paper's reported numerical experiment.
 
-Example using an ITC 2019 instance with preprocessing and biclique strengthening:
+Example using an ITC 2019 instance with the paper's no-preprocessing setting and
+biclique strengthening:
 
 ```bash
 python lecture_hall_experiment.py \
     --source itc2019 \
     --itc-instance pu-proj-fal19 \
-    --compatibility-preprocess light \
     --biclique \
     --time-limit 120
 ```
@@ -554,7 +559,6 @@ python lecture_hall_experiment.py \
     --time-limit 120 \
     --seed 1-10 \
     --biclique \
-    --compatibility-preprocess full \
     --save-json
 ```
 
@@ -571,10 +575,10 @@ python lecture_hall_experiment.py \
 
 ### Factorial Experiments
 
-The repository includes several shell scripts to automate running comprehensive factorial parameter sweeps across the dataset:
-- `run_full_factorial_all.sh`: Runs the exact solvers (`MIPQ`, `MIP`, `CP`) with all eight combinations of biclique strengthening, capacity-dominance constraints, and compatibility preprocessing on the 5 largest ITC 2019 instances (5 daily instances of the quadratic hall assignment problem for each, so 25 instances in total). The revised paper uses the `MIPQ` and `MIP` rows; the `CP` rows document the CP-SAT attempt.
-- `run_full_factorial_lancs.sh`: Runs the same exact solver sweep over the 10 individual weekdays extracted from the Lancaster `lancs_yr23` instance (10 daily instances - 5 from the weekdays of the most loaded week in the first and second terms). The revised paper again uses only the `MIPQ` and `MIP` rows.
-- `run_relaxations_factorial.sh`: Evaluates only the `ROOT` node linear relaxation bound across the same 35 daily instances (25 ITC 2019 days + 10 Lancaster days) to benchmark the gap-closing impact of the different biclique and preprocessing combinations.
+The repository includes several shell scripts to automate the factorial parameter sweeps:
+- `run_full_factorial_all.sh`: Runs `MIPQ`, `MIP`, and `CP` with all eight combinations of biclique strengthening, capacity-dominance constraints, and `none`/`light` compatibility preprocessing on 25 ITC 2019 daily instances. The paper uses only the four no-preprocessing configurations of `MIPQ` and `MIP`; the other rows are exploratory.
+- `run_full_factorial_lancs.sh`: Runs the same exact-solver sweep on the 10 Lancaster daily instances, comprising five weekdays from the selected peak week of each term. The same paper filter applies.
+- `run_relaxations_factorial.sh`: Runs the `ROOT` diagnostic over the same 35 daily instances and all eight enhancement combinations. The paper uses only the four no-preprocessing configurations; the light-preprocessing rows are exploratory.
 - `run_revision_1800.sh`: Runs the complete revision campaign with a default 1800-second solver limit and timestamped logs.
 
 The first three scripts accept the running time per instance as a positional
@@ -614,11 +618,9 @@ default and can be overridden by setting the `TIME_LIMIT` environment variable.
   - `ROOT`: root-node bound of the linearized GUROBI formulation.
   - If omitted, the script solves `MIPQ`, `MIP`, and `CP`.
 - `--compatibility-preprocess {none,full,light}`: optional CP-SAT preprocessing that shrinks the compatible set `H(l)` before any solver is built.
-  - `none`: disable preprocessing.
-  - `full`: for each lecture `l'`, solve the hard-feasibility assignment model on all lectures while maximizing the capacity assigned to `l'`, then remove from `H(l')` every hall whose capacity is larger than the resulting maximum.
-  - `light`: same idea, but solve the subproblem only on `l'` and lectures that overlap `l'`.
-  - The `light` mode is safe but weaker: it may leave extra halls in `H(l')`, yet it cannot remove a hall that is needed by a globally feasible solution.
-  - The reduction is applied iteratively until a fixed point is reached, so later subproblems benefit from earlier compatibility shrinkage.
+  - `none`: disable preprocessing. This is the setting used for every result reported in the revised paper.
+  - `light`: run the exploratory local preprocessing method documented below.
+  - `full`: retained as a legacy command-line option, but it was not part of the final 1800-second campaign and is not a paper-reproduction target.
 - `--instance-only`: generate the instance only, print the input in a user-friendly terminal format, and write JSON export(s). No solver is run and no Excel workbook is written.
 - `--output`: Excel output path. Default: `results.xlsx`.
 - `-s`, `--save-json`: also write a JSON file with the full instance and all solutions.
@@ -642,22 +644,59 @@ It does **not** use the older four-index linearization with variables `y_(l1,l2,
 
 The anchor-based biclique construction is the direct implementation of **Algorithm 1** in Section 3.3 of the paper. The routine `distance_extended_biclique_patterns` in `lecture_hall_experiment.py` enumerates, for each successor pair `(l_1, l_2)` and each anchor hall pair `(h_1, h_2) \in H(l_1) \times H(l_2)`, the triple `(S_1, S_2, δ)` with `δ = d(h_1,h_2)`, `S_2 = {h ∈ H(l_2) : d(h_1,h) ≥ δ}`, and `S_1 = {h ∈ H(l_1) : d(h,h'') ≥ δ for every h'' ∈ S_2}`. The returned triples are deduplicated before any cut (or CP propagation) is posted. The same routine is reused by `MIP`, `MIPQ`, and `CP`.
 
-## Compatibility Preprocessing
+## Exploratory Light Compatibility Preprocessing
 
-The optional compatibility preprocessor uses OR-Tools CP-SAT on the hard constraints only:
-- each lecture must be assigned to exactly one currently compatible hall;
-- overlapping lectures cannot use the same hall;
-- the walking objective is ignored.
+Light compatibility preprocessing was one of the exploratory tests performed
+during the revision. It remains implemented and its 1800-second result rows are
+archived, but it was excluded from the revised paper because its end-to-end
+computational benefit was negligible.
 
-For a target lecture `l'`, the preprocessing objective is to maximize the capacity of the hall assigned to `l'`. Any hall in `H(l')` whose capacity is strictly larger than that maximum can be removed safely before solving `MIPQ`, `MIP`, `CP`, or `ROOT`.
+For each target lecture `l'`, let `L'(l')` contain `l'` and every lecture whose
+time interval overlaps that of `l'`. The light preprocessor builds a local
+OR-Tools CP-SAT assignment model on `L'(l')`:
 
-The implementation provides two scopes:
-- `full`: solve the subproblem on all lectures.
-- `light`: solve it only on `l'` and lectures that overlap `l'`.
+- every local lecture is assigned to exactly one hall in its current compatible
+  set;
+- lectures active at the same time are assigned to different halls; and
+- walking costs and all nonlocal objective terms are omitted.
 
-In both scopes, the preprocessing is run to a fixed point: after one full pass over the lectures, the reduced compatibility sets are fed back into the same subproblems and the process repeats until no `H(l)` shrinks any further.
+The local objective maximizes the capacity of the hall assigned to `l'`. Let
+`U'(l')` be a valid upper bound returned for this maximum. The preprocessor
+removes every hall `h` from `H(l')` for which `u_h > U'(l')`. This removal is
+safe: the projection of any globally feasible assignment onto `L'(l')` is
+feasible for the relaxed local model, so the capacity globally assignable to
+`l'` cannot exceed `U'(l')`. Because the local model omits constraints outside
+the overlap neighborhood, it can leave halls that a global analysis could
+remove, but it cannot remove a hall needed by a globally feasible solution.
 
-If preprocessing empties some `H(l)`, the script declares the instance infeasible before calling the main solvers.
+The procedure is applied to every lecture and repeated to a fixed point, with
+the reduced compatible sets from one pass used in the next. If a compatible set
+becomes empty, the runner reports the instance as infeasible before building the
+main optimization model.
+
+To reproduce one light-preprocessing run:
+
+```bash
+python lecture_hall_experiment.py \
+    --source itc2019 \
+    --itc-instance muni-pdf-spr16c \
+    --itc-day 0 \
+    --model MIP \
+    --compatibility-preprocess light \
+    --biclique \
+    --time-limit 1800 \
+    --output exploratory_light_preprocessing.xlsx \
+    --quiet
+```
+
+Across the 35 real-data instances, the light variant was the fastest
+end-to-end configuration on only one instance; a no-preprocessing configuration
+was faster on the other 34. Over the archived light-preprocessing `MIPQ`/`MIP`
+runs, preprocessing alone took 123.16 seconds on average, 26.56 seconds at the
+median, and 1172.41 seconds at the maximum. The archived workbooks contain 280
+such exact-solver rows and 140 corresponding `ROOT` rows. These rows document
+the exploratory test and are not used in any table or numerical claim in the
+revised paper.
 
 ## Outputs
 
@@ -720,9 +759,9 @@ With `--instance-only`, the terminal output switches to a readable instance repo
 ## Citation and License
 
 The submitted code is available as [GitHub release
-`v1.0.2`](https://github.com/tal69/lecture-halls/releases/tag/v1.0.2). Its
+`v1.0.3`](https://github.com/tal69/lecture-halls/releases/tag/v1.0.3). Its
 exact immutable archive is Zenodo DOI
-[`10.5281/zenodo.21301888`](https://doi.org/10.5281/zenodo.21301888). This and
+[`10.5281/zenodo.21310605`](https://doi.org/10.5281/zenodo.21310605). This and
 any later versions are grouped under concept DOI
 [`10.5281/zenodo.21294644`](https://doi.org/10.5281/zenodo.21294644). Citation
 metadata are provided in [`CITATION.cff`](CITATION.cff), which GitHub can render
